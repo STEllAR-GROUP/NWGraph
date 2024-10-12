@@ -164,7 +164,7 @@ void permute(const Vector1& vec1, Vector2& vec2, const Perm& perm) {
     }
   });
 #elif NWGRAPH_HAVE_HPX
-  hpx::for_loop(hpx::execution::par, 0ul, perm.size(), [&](auto&& i) {
+  hpx::experimental::for_loop(hpx::execution::par, 0ul, perm.size(), [&](auto&& i) {
         vec2[i] = vec1[perm[i]];
   });
 #endif
@@ -556,7 +556,7 @@ auto degrees(const Graph& graph, ExecutionPolicy&& policy = {}) {
     }
   });
 #elif NWGRAPH_HAVE_HPX
-  hpx::for_loop(hpx::execution::par, 0ul, degree_v.size(), [&](auto&& i) {
+  hpx::experimental::for_loop(hpx::execution::par, 0ul, degree_v.size(), [&](auto&& i) {
           degree_v[i] = degree(graph[i]);
   });
 #endif
@@ -665,7 +665,7 @@ auto perm_by_degree(edge_list_t& el, const Vector& degree, std::string direction
       std::cout << "Unknown direction: " << direction << std::endl;
   }
 #elif NWGRAPH_HAVE_HPX
-  hpx::for_loop(hpx::execution::par, 0ul, perm.size(), [&](auto&& i) {
+  hpx::experimental::for_loop(hpx::execution::par, 0ul, perm.size(), [&](auto&& i) {
         perm[i] = i;
   });
   auto d = degree.begin();
@@ -708,7 +708,7 @@ requires(true == is_unipartite<typename edge_list_t::unipartite_graph_base>::val
       std::get<1>(x) = iperm[std::get<1>(x)];
     });
 #elif NWGRAPH_HAVE_HPX
-  hpx::for_loop(hpx::execution::par, 0ul, iperm.size(), [&](auto&& i) {
+  hpx::experimental::for_loop(hpx::execution::par, 0ul, iperm.size(), [&](auto&& i) {
           iperm[perm[i]] = i;
   });
   hpx::for_each(policy, el.begin(), el.end(), [&](auto&& x) {
@@ -743,7 +743,7 @@ requires(false == is_unipartite<typename edge_list_t::bipartite_graph_base>::val
     }
   });
 #elif NWGRAPH_HAVE_HPX
-  hpx::for_loop(hpx::execution::par, 0ul, iperm.size(), [&](auto&& i) {
+  hpx::experimental::for_loop(hpx::execution::par, 0ul, iperm.size(), [&](auto&& i) {
           iperm[perm[i]] = i;
   });
 #endif

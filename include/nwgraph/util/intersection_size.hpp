@@ -66,7 +66,7 @@ std::size_t intersection_size(A i, B&& ie, C j, D&& je, ExecutionPolicy&& ep) {
 #ifdef NWGRAPH_HAVE_HPX
 
       //std::vector<decltype(i)::value_type> res(std::distance(i, ie));
-  // TODO: Make it work for hpx::exeuction::par.
+  // TODO: Make it work for hpx::execution::par.
       return std::size_t(hpx::set_intersection(hpx::execution::seq, std::forward<A>(i), std::forward<B>(ie), std::forward<C>(j),
           std::forward<D>(je), nw::graph::counter{}, lt));
 #else
@@ -160,7 +160,7 @@ std::size_t intersection_size(A&& i, B&& ie, C&& j, D&& je) {
 
 /// A convenience overload for `intersection_size`.
 ///
-/// This overload takes two ranges and and forwards to the base
+/// This overload takes two ranges and forwards to the base
 /// `intersection_size` implementation with a sequential execution policy.
 ///
 /// @tparam           R The type of the first range.
