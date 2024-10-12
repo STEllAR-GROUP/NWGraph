@@ -188,6 +188,8 @@ public:    // fixme
 
     reference operator[](index_t n) { return {indexed_ + indices_[i_ + n], indexed_ + indices_[i_ + n + 1]}; }
     reference operator[](index_t n) const { return {indexed_ + indices_[i_ + n], indexed_ + indices_[i_ + n + 1]}; }
+
+    auto index() const { return indices_[i_]; }
   };
 
   using const_outer_iterator = my_outer_iterator<true>;
@@ -410,7 +412,7 @@ public:    // fixme
       }
     });
 #elif NWGRAPH_HAVE_HPX
-    hpx::for_loop(hpx::execution::par, 0ul, indices_.size() - 1, [&](auto&& r) {
+    hpx::experimental::for_loop(hpx::execution::par, 0ul, indices_.size() - 1, [&](auto&& r) {
       for (auto i = r.begin(), e = r.end(); i != e; ++i) {
           degs[i] = indices_[i + 1] - indices_[i];
       }
@@ -457,7 +459,7 @@ public:    // fixme
       }
     });
 #elif NWGRAPH_HAVE_HPX
-    hpx::for_loop(hpx::execution::par, 0ul, std::get<0>(to_be_indexed_).size(), [&](auto&& r) {
+    hpx::experimental::for_loop(hpx::execution::par, 0ul, std::get<0>(to_be_indexed_).size(), [&](auto&& r) {
         for (auto i = r.begin(), e = r.end(); i != e; ++i) {
             s[i] = new_id_perm[s[i]];
         }
@@ -484,7 +486,7 @@ public:    // fixme
       }
     });
 #elif NWGRAPH_HAVE_HPX
-    hpx::for_loop(hpx::execution::par, 0ul, n, [&](auto&& r) {
+    hpx::experimental::for_loop(hpx::execution::par, 0ul, n, [&](auto&& r) {
         for (auto i = r.begin(), e = r.end(); i != e; ++i) {
             perm[i] = i;
         }
@@ -519,7 +521,7 @@ public:    // fixme
       }
     });
 #elif NWGRAPH_HAVE_HPX
-    hpx::for_loop(hpx::execution::par, 0ul, n, [&](auto&& r) {
+    hpx::experimental::for_loop(hpx::execution::par, 0ul, n, [&](auto&& r) {
       for (auto old_id = r.begin(), e = r.end(); old_id != e; ++old_id) {
           auto new_id = perm[old_id];
           new_tmp[old_id] = degs[new_id];

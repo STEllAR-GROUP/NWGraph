@@ -127,6 +127,8 @@ if(NWGRAPH_USE_TBB AND NWGRAPH_USE_HPX)
   message(FATAL "Can only enable one, TBB or HPX as parallelization backend")
 endif()
 
+include(FetchContent)
+
 if(NWGRAPH_FETCH_TBB)
   
   # Use fetch content rather than as a submodule
@@ -166,7 +168,7 @@ elseif(NWGRAPH_USE_HPX)
   find_package(Threads REQUIRED)
   add_library(nwgraph_hpx INTERFACE)
   target_compile_definitions(nwgraph_hpx INTERFACE EXECUTION_POLICY NWGRAPH_HAVE_HPX)
-  target_link_libraries(nwgraph_hpx INTERFACE HPX::hpx TBB::tbb)
+  target_link_libraries(nwgraph_hpx INTERFACE HPX::hpx HPX::partitioned_vector_component)
 endif()
 
 include(Docopt)

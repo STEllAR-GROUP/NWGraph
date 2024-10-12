@@ -19,6 +19,10 @@
 #include <cstddef>
 #include <istream>
 
+#if NWGRAPH_HAVE_HPX
+#include <hpx/include/serialization.hpp>
+#endif
+
 namespace nw {
 namespace graph {
 
@@ -57,6 +61,19 @@ public:
 };
 
 class unipartite_graph_base {
+
+#if NWGRAPH_HAVE_HPX
+    friend class hpx::serialization::access;
+
+    void serialize(hpx::serialization::input_archive& ar, unsigned /* version */) {
+      ar >> is_open >> vertex_cardinality;
+    }
+
+    void serialize(hpx::serialization::output_archive& ar, unsigned /* version */) {
+      ar << is_open << vertex_cardinality;
+    }
+#endif
+
 public:
   using vertex_cardinality_t = std::array<size_t, 1>;
 

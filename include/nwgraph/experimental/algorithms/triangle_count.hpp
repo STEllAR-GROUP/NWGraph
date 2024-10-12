@@ -283,7 +283,7 @@ template <adjacency_list_graph Graph, class OuterExecutionPolicy = std::executio
     std::atomic<std::size_t> total_triangles = 0;
     hpx::for_each(outer, A.begin(), A.end(), [&](auto&& x) {
         std::atomic<std::size_t> triangles = 0;
-        // TODO: `set` is diregarded in the HPX side until hpx::set_intersection runs with par execution policy.
+        // TODO: `set` is disregarded in the HPX side until hpx::set_intersection runs with par execution policy.
         hpx::for_each(inner, x.begin(), x.end(), [&](auto&& v) { triangles += nw::graph::intersection_size(x, A[std::get<0>(v)], set); });
         total_triangles += triangles;
         });

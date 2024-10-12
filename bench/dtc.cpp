@@ -1,5 +1,5 @@
 /**
- * @file tc.cpp
+ * @file dtc.cpp
  *
  * @copyright Copyright 2014, Software Engineering Institute, Carnegie Mellon University
  * @copyright SPDX-FileCopyrightText: 2022 Battelle Memorial Institute
@@ -14,53 +14,58 @@
  *
  */
 
-static constexpr const char USAGE[] =
-    R"(tc.exe: BGL17 triangle counting benchmark driver.
+static constexpr char USAGE[] =
+  R"(dtc.exe: BGL17 triangle counting benchmark driver (distributed).
   Usage:
-      tc.exe (-h | --help)
-      tc.exe -f FILE... [--version ID...] [-n NUM] [--lower | --upper] [--relabel] [--heuristic] [--log FILE] [--log-header] [--format FORMAT] [-dvV] [THREADS...]
+      dtc.exe (-h | --help)
+      dtc.exe -f FILE... [--version ID...] [-n NUM] [--lower | --upper] [--relabel] [--heuristic] [--log FILE] [--log-header] [--format FORMAT] [--partitions PARTS] [-dvV] [THREADS...]
 
   Options:
-      -h, --help            show this screen
-      --version ID          algorithm version to run [default: 4]
-      -f FILE               input file path
-      -n NUM                number of trials [default: 1]
-      --lower               lower triangular order [default: false]
-      --upper               upper triangular order [default: true]
-      --relabel             relabel the graph
-      --heuristic           use heuristic to decide whether to relabel or not
-      --format FORMAT       specify which graph storage format [default: CSR]
-      --log FILE            log times to a file
-      --log-header          add a header to the log file
-      -d, --debug           run in debug mode
-      -v, --verify          verify results
-      -V, --verbose         run in verbose mode
+      -h, --help              show this screen
+      --version ID            algorithm version to run [default: 4]
+      -f FILE                 input file path
+      -n NUM                  number of trials [default: 1]
+      --lower                 lower triangular order [default: false]
+      --upper                 upper triangular order [default: true]
+      --relabel               relabel the graph
+      --heuristic             use heuristic to decide whether to relabel or not
+      --format FORMAT         specify which graph storage format [default: CSR]
+      --log FILE              log times to a file
+      --log-header            add a header to the log file
+      -d, --debug             run in debug mode
+      -v, --verify            verify results
+      -V, --verbose           run in verbose mode
+      -p, --partitions PARTS  number of graph partitions to create [default: 1]
 )";
 
 
-#if NWGRAPH_HAVE_HPX
-#include <hpx/hpx_main.hpp>
+#ifndef NWGRAPH_HAVE_HPX
+#error "This benchmark requires using the HPX backend for NWGraph"
 #endif
 
-#ifdef _MSC_VER
-#pragma comment(lib, "Ws2_32.lib")
-#endif
+#include <hpx/hpx_init.hpp>
 
 #include "nwgraph/adjacency.hpp"
 #include "nwgraph/edge_list.hpp"
 #include "nwgraph/volos.hpp"
 #include "nwgraph/vovos.hpp"
 
-#include "common.hpp"
-#include "nwgraph/algorithms/triangle_count.hpp"
-#include "nwgraph/experimental/algorithms/triangle_count.hpp"
 #include <docopt.h>
 #include <tuple>
+#include "common.hpp"
+#include "nwgraph/algorithms/partitioned_triangle_count.hpp"
+#include "nwgraph/partitioned_adjacency.hpp"
 
-#include "config.h"
 #include <date/date.h>
+#include "config.h"
 
 #include <nlohmann/json.hpp>
+
+#include <hpx/include/partitioned_vector.hpp>
+
+using unsigned_int = unsigned int;
+HPX_REGISTER_PARTITIONED_VECTOR(unsigned_int)
+
 using json = nlohmann::json;
 
 using namespace nw::graph::bench;
@@ -68,13 +73,14 @@ using namespace nw::graph;
 using namespace nw::util;
 
 template <class Vector>
-static void tc_relabel(edge_list<directedness::undirected>& A, Vector&& degrees, const std::string& direction) {
+static void tc_relabel(edge_list<directedness::undirected>& A, Vector&& degrees,
+                       std::string const& direction) {
   life_timer _(__func__);
   relabel_by_degree<0>(A, direction, degrees);
 }
 
 template <std::size_t id = 0>
-static void clean(edge_list<directedness::undirected>& A, const std::string& succession) {
+static void clean(edge_list<directedness::undirected>& A, std::string const& succession) {
   life_timer _(__func__);
   swap_to_triangular<id>(A, succession);
   lexical_sort_by<id>(A);
@@ -82,27 +88,89 @@ static void clean(edge_list<directedness::undirected>& A, const std::string& suc
   remove_self_loops(A);
 }
 
-template <adjacency_list_graph Graph>
-auto compress(edge_list<directedness::undirected>& A) {
+auto vertex_sizes(size_t num_partitions, size_t all_vertices) {
+
+  std::vector<size_t> vert_sizes;
+  vert_sizes.reserve(num_partitions);
+
+  size_t part_size = (all_vertices + num_partitions - 1) / num_partitions;
+  for (size_t part = 0, num_vertices = 0; part != num_partitions;
+       ++part, num_vertices += part_size) {
+
+    assert(all_vertices >= num_vertices);
+    size_t this_part_size =
+      (num_vertices + part_size > all_vertices ? all_vertices - num_vertices : part_size);
+
+    vert_sizes.push_back(this_part_size);
+  }
+
+  return vert_sizes;
+}
+
+template <adjacency_list_graph GraphT, class Vector>
+auto edge_sizes(GraphT const& A, Vector const& vert_sizes) {
+
+  Vector cedge_sizes;
+  cedge_sizes.reserve(vert_sizes.size());
+
+  auto begin = A.begin();
+  auto prev_idx = begin.index();
+  for (auto size : vert_sizes) {
+    begin += size;
+    cedge_sizes.push_back(begin.index() - prev_idx);
+    prev_idx = cedge_sizes.back();
+  }
+
+  return cedge_sizes;
+}
+
+inline auto compress(edge_list<directedness::undirected>& A) {
   life_timer _(__func__);
-  Graph      B(num_vertices(A));
+  adjacency<0> B(num_vertices(A));
   push_back_fill(A, B);
+  return B;
+}
+
+template <adjacency_list_graph adjacency_t, typename... Ts>
+auto partitioned_push_back_fill_helper(size_t idx, adjacency_t& cs,
+                                       std::tuple<Ts...> const& theTuple) {
+  std::apply([&](Ts const&... args) { cs.push_at(idx, args...); }, theTuple);
+}
+
+template <edge_list_c edge_list_t, adjacency_list_graph adjacency_t>
+void partitioned_push_back_fill(edge_list_t& el, adjacency_t& cs) {
+  cs.open_for_push_back();
+
+  std::for_each(el.begin(), el.end(), [&, idx = 0](auto&& elt) mutable
+                { partitioned_push_back_fill_helper(idx++, cs, elt); });
+
+  cs.close_for_push_back();
+}
+
+template <adjacency_list_graph Graph, class Vector>
+auto compress(size_t num_partitions, edge_list<directedness::undirected>& A, Vector&& vert_sizes,
+              Vector&& edge_sizes) {
+  life_timer _(__func__);
+  Graph B(num_vertices(A), num_edges(A), std::forward<Vector>(vert_sizes),
+          std::forward<Vector>(edge_sizes));
+  partitioned_push_back_fill(A, B);
   return B;
 }
 
 // heuristic to see if sufficiently dense power-law graph
 template <edge_list_graph EdgeList, class Vector>
-static bool worth_relabeling(const EdgeList& el, const Vector& degree) {
+static bool worth_relabeling(EdgeList const& el, Vector const& degree) {
   using vertex_id_type = typename EdgeList::vertex_id_type;
 
   int64_t average_degree = el.size() / (el.num_vertices()[0]);
-  if (average_degree < 10) return false;
+  if (average_degree < 10)
+    return false;
 
-  int64_t              num_samples  = std::min<int64_t>(1000L, el.num_vertices()[0]);
-  int64_t              sample_total = 0;
+  int64_t num_samples = std::min<int64_t>(1000L, el.num_vertices()[0]);
+  int64_t sample_total = 0;
   std::vector<int64_t> samples(num_samples);
 
-  std::mt19937                                  rng;
+  std::mt19937 rng;
   std::uniform_int_distribution<vertex_id_type> udist(0, el.num_vertices()[0] - 1);
 
   for (int64_t trial = 0; trial < num_samples; trial++) {
@@ -115,7 +183,7 @@ static bool worth_relabeling(const EdgeList& el, const Vector& degree) {
   std::sort(std::execution::par_unseq, samples.begin(), samples.end());
 #endif
   double sample_average = static_cast<double>(sample_total) / num_samples;
-  double sample_median  = samples[num_samples / 2];
+  double sample_median = samples[num_samples / 2];
   return sample_average / 1.3 > sample_median;
 }
 
@@ -124,30 +192,31 @@ template <adjacency_list_graph Graph>
 static std::size_t TCVerifier(Graph& graph) {
   using vertex_id_type = typename Graph::vertex_id_type;
 
-  life_timer                              _(__func__);
+  life_timer _(__func__);
   std::vector<std::tuple<vertex_id_type>> intersection;
   intersection.reserve(graph.size());
   for (auto&& [u, v] : edge_range(graph)) {
     auto u_out = graph[u];
     auto v_out = graph[v];
-    std::set_intersection(u_out.begin(), u_out.end(), v_out.begin(), v_out.end(), std::back_inserter(intersection));
+    std::set_intersection(u_out.begin(), u_out.end(), v_out.begin(), v_out.end(),
+                          std::back_inserter(intersection));
   }
   std::size_t total = intersection.size();
-  return total;    // note that our processed Graph doesn't produce extra counts
-                   // like the GAP verifier normally would
+  return total; // note that our processed Graph doesn't produce extra counts
+                // like the GAP verifier normally would
 }
 
 auto config_log() {
   std::string uuid_;
-  char        host_[16];
+  char host_[16];
   std::string date_;
   std::string git_branch_;
   std::string git_version_;
   std::size_t uuid_size_ = 24;
 
   auto seed = std::random_device();
-  auto gen  = std::mt19937(seed());
-  auto dis  = std::uniform_int_distribution<short>(97, 122);
+  auto gen = std::mt19937(seed());
+  auto dis = std::uniform_int_distribution<short>(97, 122);
   uuid_.resize(uuid_size_);
   std::generate(uuid_.begin(), uuid_.end(), [&] { return dis(gen); });
 
@@ -156,7 +225,7 @@ auto config_log() {
     strncpy(host_, "ghost", 15);
   }
   {
-    std::stringstream    ss;
+    std::stringstream ss;
     date::year_month_day date = date::floor<date::days>(std::chrono::system_clock::now());
     ss << date;
     date_ = ss.str();
@@ -185,7 +254,7 @@ auto config_log() {
 }
 
 template <typename Args>
-auto args_log(const Args& args) {
+auto args_log(Args const& args) {
   json arg_log;
 
   for (auto&& arg : args) {
@@ -199,24 +268,26 @@ auto args_log(const Args& args) {
 template <typename Graph>
 void run_bench(int argc, char* argv[]) {
   std::vector<std::string> strings(argv + 1, argv + argc);
-  auto                     args = docopt::docopt(USAGE, strings, true);
+  auto args = docopt::docopt(USAGE, strings, true);
 
   // Read the easy options
-  bool verify  = args["--verify"].asBool();
+  bool verify = args["--verify"].asBool();
   bool verbose = args["--verbose"].asBool();
-  bool debug   = args["--debug"].asBool();
-  long trials  = args["-n"].asLong() ? args["-n"].asLong() : 1;
+  bool debug = args["--debug"].asBool();
+  long trials = args["-n"].asLong() ? args["-n"].asLong() : 1;
+  long num_partitions = args["--partitions"].asLong() ? args["--partitions"].asLong()
+                                                      : hpx::get_num_localities(hpx::launch::sync);
 
   // Read the more complex options
-  std::string direction  = "ascending";
+  std::string direction = "ascending";
   std::string succession = "successor";
   if (args["--lower"].asBool()) {
-    direction  = "descending";
+    direction = "descending";
     succession = "predecessor";
   }
 
-  std::vector files   = args["-f"].asStringList();
-  std::vector ids     = parse_ids(args["--version"].asStringList());
+  std::vector files = args["-f"].asStringList();
+  std::vector ids = parse_ids(args["--version"].asStringList());
   std::vector threads = parse_n_threads(args["THREADS"].asStringList());
 
   json file_log = {};
@@ -224,19 +295,21 @@ void run_bench(int argc, char* argv[]) {
   for (auto&& file : files) {
     std::cout << "processing " << file << "\n";
 
-    auto el_a   = load_graph<nw::graph::directedness::undirected>(file);
+    auto el_a = load_graph<nw::graph::directedness::undirected>(file);
     auto degree = degrees(el_a);
 
-    // Run and time relabeling. This operates directly on the incoming edglist.
-    bool relabeled        = false;
-    auto&& [relabel_time] = time_op([&] {
-      if (args["--relabel"].asBool()) {
-        if (args["--heuristic"].asBool() == false || worth_relabeling(el_a, degree)) {
-          tc_relabel(el_a, degree, direction);
-          relabeled = true;
+    // Run and time relabeling. This operates directly on the incoming edgelist.
+    bool relabeled = false;
+    auto&& [relabel_time] = time_op(
+      [&]
+      {
+        if (args["--relabel"].asBool()) {
+          if (args["--heuristic"].asBool() == false || worth_relabeling(el_a, degree)) {
+            tc_relabel(el_a, degree, direction);
+            relabeled = true;
+          }
         }
-      }
-    });
+      });
 
     // Force relabel time to 0 if we didn't relabel, this just suppresses
     // nanosecond noise from the time_op function when relabeling wasn't done.
@@ -248,10 +321,16 @@ void run_bench(int argc, char* argv[]) {
     // undirectedness.
     auto&& [clean_time] = time_op([&] { clean<0>(el_a, succession); });
 
-    auto cel_a = compress<Graph>(el_a);
+    auto local_cel_a = compress(el_a);
+
+    auto cvert_sizes = vertex_sizes(num_partitions, num_vertices(el_a));
+    auto cedge_sizes = edge_sizes(local_cel_a, cvert_sizes);
+
+    auto cel_a =
+      compress<Graph>(num_partitions, el_a, std::move(cvert_sizes), std::move(cedge_sizes));
 
     //    if (debug) {
-    //cel_a.stream_indices();
+    // cel_a.stream_indices();
     //}
 
     // If we're verifying then compute the number of triangles once for this
@@ -262,28 +341,31 @@ void run_bench(int argc, char* argv[]) {
       std::cout << "verifier reports " << v_triangles << " triangles\n";
     }
 
-    json   thread_log = {};
+    json thread_log = {};
     size_t thread_ctr = 0;
 
     for (auto&& thread : threads) {
       auto _ = set_n_threads(thread);
 
-      json   id_log = {};
+      json id_log = {};
       size_t id_ctr = 0;
       for (auto&& id : ids) {
 
-      json   run_log = {};
-      size_t run_ctr = 0;
+        json run_log = {};
+        size_t run_ctr = 0;
 
         for (int j = 0; j < trials; ++j) {
           if (verbose) {
             std::cout << "running version:" << id << " threads:" << thread << "\n";
           }
 
-          auto&& [time, triangles] = time_op([&]() -> std::size_t {
-            switch (id) {
+          auto&& [time, triangles] = time_op(
+            [&]() -> std::size_t
+            {
+              switch (id) {
               case 0:
-                return triangle_count(cel_a);
+                return partitioned_triangle_count(cel_a);
+#if 0
               case 1:
                 return triangle_count_v1(cel_a);
               case 2:
@@ -312,7 +394,6 @@ void run_bench(int argc, char* argv[]) {
                  return triangle_count_v13(cel_a, thread);
                case 14:
                  return triangle_count_v14(cel_a);
-#if 0
                case 15:
                  return triangle_count_edgesplit(cel_a, thread);
                case 16:
@@ -327,62 +408,69 @@ void run_bench(int argc, char* argv[]) {
               default:
                 std::cerr << "Unknown version id " << id << "\n";
                 return 0ul;
-            }
-          });
+              }
+            });
 
           run_log[run_ctr++] = {{"id", id},
-                            {"num_threads", thread},
-                            {"trial", j},
-                            {"elapsed", time},
-                            {"elapsed+relabel", time + relabel_time},
-                            {"triangles", triangles}};
+                                {"num_threads", thread},
+                                {"trial", j},
+                                {"elapsed", time},
+                                {"elapsed+relabel", time + relabel_time},
+                                {"triangles", triangles}};
 
           if (verify && triangles != v_triangles) {
-            std::cerr << "Inconsistent results: v" << id << " failed verification for " << file << " using " << thread << " threads (reported "
-                      << triangles << ")\n";
+            std::cerr << "Inconsistent results: v" << id << " failed verification for " << file
+                      << " using " << thread << " threads (reported " << triangles << ")\n";
           }
-        }    // for j in trials
+        } // for j in trials
 
         id_log[id_ctr++] = {{"id", id}, {"runs", std::move(run_log)}};
-      }    // for id in ids
+      } // for id in ids
 
       thread_log[thread_ctr++] = {{"num_thread", thread}, {"runs", std::move(id_log)}};
-    }    // for thread in threads
+    } // for thread in threads
 
-    file_log[file_ctr++] = {{"File", file},           {"Relabel_time", relabel_time}, {"Clean_time", clean_time},
-                            {"Relabeled", relabeled}, {"Num_trials", trials},         {"Runs", std::move(thread_log)}};
+    file_log[file_ctr++] = {
+      {"File", file},           {"Relabel_time", relabel_time}, {"Clean_time", clean_time},
+      {"Relabeled", relabeled}, {"Num_trials", trials},         {"Runs", std::move(thread_log)}};
 
-  }    // for each file
+  } // for each file
   if (args["--log"]) {
 
-    json log_log = {{"Config", config_log()}, {"Args", args_log(args)}, {"Files", std::move(file_log)}};
+    json log_log = {
+      {"Config", config_log()}, {"Args", args_log(args)}, {"Files", std::move(file_log)}};
 
     if (args["--log"].asString() == "-") {
       std::cout << log_log << std::endl;
-    } else {
+    }
+    else {
       std::ofstream outfile(args["--log"].asString(), std::ios_base::app);
       outfile << log_log << std::endl;
     }
   }
 }
 
-int main(int argc, char* argv[]) {
+int hpx_main(int argc, char* argv[]) {
   std::vector<std::string> strings(argv + 1, argv + argc);
-  auto                     args = docopt::docopt(USAGE, strings, true);
+  auto args = docopt::docopt(USAGE, strings, true);
 
   if (args["--format"].asString() == "CSR") {
-    run_bench<adjacency<0>>(argc, argv);
+    run_bench<partitioned_adjacency<0>>(argc, argv);
 
-  } else if (args["--format"].asString() == "VOV") {
-    run_bench<vov<0>>(argc, argv);
-
-  } else if (args["--format"].asString() == "VOL") {
-    run_bench<adj_list<0>>(argc, argv);
-
-  } else {
+    //  } else if (args["--format"].asString() == "VOV") {
+    //    run_bench<vov<0>>(argc, argv);
+    //
+    //  } else if (args["--format"].asString() == "VOL") {
+    //    run_bench<adj_list<0>>(argc, argv);
+  }
+  else {
     std::cerr << "bad format" << std::endl;
+    hpx::finalize();
     return -1;
   }
 
+  hpx::finalize();
   return 0;
 }
+
+int main(int argc, char* argv[]) { return hpx::init(argc, argv); }

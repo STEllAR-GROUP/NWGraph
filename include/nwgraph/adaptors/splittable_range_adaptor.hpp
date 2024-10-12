@@ -19,7 +19,7 @@
 #define NW_GRAPH_SPLITTABLE_RANGE_ADAPTOR_HPP
 
 #include <cstddef>
-#if NWGRAPH_HAVE_TBB
+#if NWGRAPH_HAVE_TBB != 0
 #include <oneapi/tbb.h>
 #endif 
 

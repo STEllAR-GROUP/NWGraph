@@ -82,10 +82,12 @@ struct struct_of_arrays : std::tuple<std::vector<Attributes>...> {
     soa_t*      soa_{nullptr};
 
   public:
-    using value_type        = std::conditional_t<is_const, std::tuple<const typename std::vector<Attributes>::value_type...>,
-						 std::tuple<typename std::vector<Attributes>::value_type...>>;
+    using value_type        = std::conditional_t<is_const,
+      std::tuple<const typename std::vector<Attributes>::value_type...>,
+      std::tuple<typename std::vector<Attributes>::value_type...>>;
     using difference_type   = std::ptrdiff_t;
-    using reference        = std::conditional_t<is_const, std::tuple<select_access_type<typename std::vector<Attributes>::const_iterator>...>,
+    using reference        = std::conditional_t<is_const,
+      std::tuple<select_access_type<typename std::vector<Attributes>::const_iterator>...>,
       std::tuple<select_access_type<typename std::vector<Attributes>::iterator>...>>;
     using pointer           = arrow_proxy<reference>;
     using iterator_category = std::random_access_iterator_tag;
@@ -159,13 +161,25 @@ struct struct_of_arrays : std::tuple<std::vector<Attributes>...> {
     }
 
     decltype(auto) operator*() const {
+      if constexpr(is_const) {
         return std::apply(
-            [this]<class... Vectors>(Vectors && ... v) { return reference(std::forward<Vectors>(v)[i_]...); }, *soa_);
+            [this]<class... Vectors>(Vectors && ... v) { return reference(std::forward<Vectors>(v)[i_]...); }, const_cast<base&>(static_cast<base const&>(*soa_)));
+      }
+      else {
+        return std::apply(
+            [this]<class... Vectors>(Vectors && ... v) { return reference(std::forward<Vectors>(v)[i_]...); }, static_cast<base&>(*soa_));
+      }
     }
 
     decltype(auto) operator[](std::ptrdiff_t n) const {
-      return std::apply(
-          [this, n]<class... Vectors>(Vectors && ... v) { return reference(std::forward<Vectors>(v)[i_ + n]...); }, *soa_);
+      if constexpr(is_const) {
+        return std::apply(
+            [this, n]<class... Vectors>(Vectors && ... v) { return reference(std::forward<Vectors>(v)[i_ + n]...); }, const_cast<base&>(static_cast<base const&>(*soa_)));
+      }
+      else {
+        return std::apply(
+            [this, n]<class... Vectors>(Vectors && ... v) { return reference(std::forward<Vectors>(v)[i_ + n]...); }, static_cast<base&>(*soa_));
+      }
     }
 
     pointer operator->() const {
@@ -238,23 +252,23 @@ struct struct_of_arrays : std::tuple<std::vector<Attributes>...> {
   }
 
   reference operator[](std::size_t i) {
-    return std::apply([&](auto&... r) { return std::forward_as_tuple(std::forward<decltype(r)>(r)[i]...); }, *this);
+    return std::apply([&](auto&... r) { return std::forward_as_tuple(std::forward<decltype(r)>(r)[i]...); }, static_cast<base&>(*this));
   }
 
   const_reference operator[](std::size_t i) const {
-    return std::apply([&](auto&... r) { return std::forward_as_tuple(std::forward<decltype(r)>(r)[i]...); }, *this);
+    return std::apply([&](auto&... r) { return std::forward_as_tuple(std::forward<decltype(r)>(r)[i]...); }, static_cast<base const&>(*this));
   }
 
   constexpr pointer data() noexcept {
-    return std::apply([&](auto&... p) { return std::forward_as_tuple(std::forward<decltype(p)>(p).data()...); }, *this);
+    return std::apply([&](auto&... p) { return std::forward_as_tuple(std::forward<decltype(p)>(p).data()...); }, static_cast<base&>(*this));
   }
 
   constexpr const_pointer data() const noexcept {
-    return std::apply([&](auto&... p) { return std::forward_as_tuple(std::forward<decltype(p)>(p).data()...); }, *this);
+    return std::apply([&](auto&... p) { return std::forward_as_tuple(std::forward<decltype(p)>(p).data()...); }, static_cast<base const&>(*this));
   }
 
   void move(std::vector<Attributes>&&... attrs) {
-    std::apply([&](auto&&... vs) { (vs.swap(attrs), ...); }, *this);
+    std::apply([&](auto&&... vs) { (vs.swap(attrs), ...); }, static_cast<base&>(*this));
   }
 
   void move(std::tuple<std::vector<Attributes>...>&& attrs) {
@@ -262,7 +276,7 @@ struct struct_of_arrays : std::tuple<std::vector<Attributes>...> {
   }
 
   void copy(const std::vector<Attributes>&... attrs) {
-    std::apply([&](auto&... vs) { (std::copy(attrs.begin(), attrs.end(), vs.begin()), ...); }, *this);
+    std::apply([&](auto&... vs) { (std::copy(attrs.begin(), attrs.end(), vs.begin()), ...); }, static_cast<base&>(*this));
   }
 
   void copy(const std::tuple<std::vector<Attributes>...>& attrs) {
@@ -270,7 +284,7 @@ struct struct_of_arrays : std::tuple<std::vector<Attributes>...> {
   }
 
   void push_back(const Attributes&... attrs) {
-    std::apply([&](auto&... vs) { (vs.push_back(attrs), ...); }, *this);
+    std::apply([&](auto&... vs) { (vs.push_back(attrs), ...); }, static_cast<base&>(*this));
   }
 
   //  void push_back(Attributes&... attrs) {
@@ -282,7 +296,7 @@ struct struct_of_arrays : std::tuple<std::vector<Attributes>...> {
   }
 
   void push_at(std::size_t i, Attributes... attrs) {
-    std::apply([&](auto&... vs) { ((vs[i] = attrs), ...); }, *this);
+    std::apply([&](auto&... vs) { ((vs[i] = attrs), ...); }, static_cast<base&>(*this));
   }
 
   void push_at(std::size_t i, std::tuple<Attributes...> attrs) {
@@ -290,15 +304,15 @@ struct struct_of_arrays : std::tuple<std::vector<Attributes>...> {
   }
 
   void clear() {
-    std::apply([&](auto&... vs) { (vs.clear(), ...); }, *this);
+    std::apply([&](auto&... vs) { (vs.clear(), ...); }, static_cast<base&>(*this));
   }
 
   void resize(size_t N) {
-    std::apply([&](auto&&... vs) { (vs.resize(N), ...); }, *this);
+    std::apply([&](auto&&... vs) { (vs.resize(N), ...); }, static_cast<base&>(*this));
   }
 
   void reserve(size_t N) {
-    std::apply([&](auto&&... vs) { (vs.reserve(N), ...); }, *this);
+    std::apply([&](auto&&... vs) { (vs.reserve(N), ...); }, static_cast<base&>(*this));
   }
 
   template <class T>
@@ -324,7 +338,7 @@ struct struct_of_arrays : std::tuple<std::vector<Attributes>...> {
     size_t el_size = std::tuple_size<storage_type>::value;
     outfile.write(reinterpret_cast<char*>(&st_size), sizeof(size_t));
     outfile.write(reinterpret_cast<char*>(&el_size), sizeof(size_t));
-    std::apply([&](auto&... vs) { (serialize(outfile, vs), ...); }, *this);
+    std::apply([&](auto&... vs) { (serialize(outfile, vs), ...); }, static_cast<base const&>(*this));
   }
 
   void serialize(const std::string& outfile_name) {
@@ -338,7 +352,7 @@ struct struct_of_arrays : std::tuple<std::vector<Attributes>...> {
     infile.read(reinterpret_cast<char*>(&st_size), sizeof(size_t));
     infile.read(reinterpret_cast<char*>(&el_size), sizeof(size_t));
     resize(st_size);
-    std::apply([&](auto&... vs) { (deserialize(infile, vs), ...); }, *this);
+    std::apply([&](auto&... vs) { (deserialize(infile, vs), ...); }, static_cast<base&>(*this));
   }
 
   void deserialize(const std::string& infile_name) {
@@ -359,11 +373,11 @@ struct struct_of_arrays : std::tuple<std::vector<Attributes>...> {
 
   template <typename index_t, typename vertex_id_type>
   void permute(const std::vector<index_t>& indices, const std::vector<index_t>& new_indices, const std::vector<vertex_id_type>& perm) {
-    std::apply([&](auto&... vs) { (permute(indices, new_indices, perm, vs), ...); }, *this);
+    std::apply([&](auto&... vs) { (permute(indices, new_indices, perm, vs), ...); }, static_cast<base&>(*this));
   }
 
   [[ nodiscard ]] size_t size() const {
-    return std::get<0>(*this).size();
+    return std::get<0>(static_cast<base const&>(*this)).size();
   }
 
   bool operator==(struct_of_arrays& a) {
