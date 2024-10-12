@@ -90,7 +90,7 @@ auto compress(edge_list<directedness::undirected>& A) {
   return B;
 }
 
-// heuristic to see if sufficently dense power-law graph
+// heuristic to see if sufficiently dense power-law graph
 template <edge_list_graph EdgeList, class Vector>
 static bool worth_relabeling(const EdgeList& el, const Vector& degree) {
   using vertex_id_type = typename EdgeList::vertex_id_type;
@@ -125,7 +125,6 @@ static std::size_t TCVerifier(Graph& graph) {
   using vertex_id_type = typename Graph::vertex_id_type;
 
   life_timer                              _(__func__);
-  std::size_t                             total = 0;
   std::vector<std::tuple<vertex_id_type>> intersection;
   intersection.reserve(graph.size());
   for (auto&& [u, v] : edge_range(graph)) {
@@ -133,7 +132,7 @@ static std::size_t TCVerifier(Graph& graph) {
     auto v_out = graph[v];
     std::set_intersection(u_out.begin(), u_out.end(), v_out.begin(), v_out.end(), std::back_inserter(intersection));
   }
-  total = intersection.size();
+  std::size_t total = intersection.size();
   return total;    // note that our processed Graph doesn't produce extra counts
                    // like the GAP verifier normally would
 }
@@ -151,7 +150,7 @@ auto config_log() {
   auto dis  = std::uniform_int_distribution<short>(97, 122);
   uuid_.resize(uuid_size_);
   std::generate(uuid_.begin(), uuid_.end(), [&] { return dis(gen); });
-  
+
   if (int e = gethostname(host_, sizeof(host_))) {
     std::cerr << "truncated host name\n";
     strncpy(host_, "ghost", 15);
@@ -273,9 +272,9 @@ void run_bench(int argc, char* argv[]) {
       size_t id_ctr = 0;
       for (auto&& id : ids) {
 
-	json   run_log = {};
-	size_t run_ctr = 0;
-	
+      json   run_log = {};
+      size_t run_ctr = 0;
+
         for (int j = 0; j < trials; ++j) {
           if (verbose) {
             std::cout << "running version:" << id << " threads:" << thread << "\n";
@@ -314,15 +313,15 @@ void run_bench(int argc, char* argv[]) {
                case 14:
                  return triangle_count_v14(cel_a);
 #if 0
-	    case 15:
-	      return triangle_count_edgesplit(cel_a, thread);
-	    case 16:
-	      return triangle_count_edgesplit_upper(cel_a, thread);
+               case 15:
+                 return triangle_count_edgesplit(cel_a, thread);
+               case 16:
+                 return triangle_count_edgesplit_upper(cel_a, thread);
 #ifdef ONE_DIMENSIONAL_EDGE
-	    case 17:
-	      return triangle_count_edgerange(cel_a);
-	    case 18:
-	      return triangle_count_edgerange_cyclic(cel_a, thread);
+               case 17:
+                 return triangle_count_edgerange(cel_a);
+               case 18:
+                 return triangle_count_edgerange_cyclic(cel_a, thread);
 #endif
 #endif
               default:
@@ -337,7 +336,7 @@ void run_bench(int argc, char* argv[]) {
                             {"elapsed", time},
                             {"elapsed+relabel", time + relabel_time},
                             {"triangles", triangles}};
-                            
+
           if (verify && triangles != v_triangles) {
             std::cerr << "Inconsistent results: v" << id << " failed verification for " << file << " using " << thread << " threads (reported "
                       << triangles << ")\n";
