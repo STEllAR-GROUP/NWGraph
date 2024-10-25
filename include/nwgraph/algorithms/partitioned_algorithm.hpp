@@ -109,6 +109,29 @@ namespace nw::graph {
     struct triangle_count_action
       : hpx::actions::action<decltype(&triangle_counter<Graph>), &triangle_counter<Graph>,
                              triangle_count_action<Graph>> {};
+
+    ////////////////////////////////////////////////////////////////////////////
+    // handle counting of triangles on target locality
+    template <typename Graph>
+    static size_t triangle_counter_1(
+      Graph G,
+      std::vector<std::tuple<std::vector<typename Graph::vertex_id_type>,
+                             std::vector<std::tuple<typename Graph::vertex_id_type>>>> const&
+        targets) {
+
+      size_t triangles = 0;
+      for (auto&& target : targets) {
+        for (auto v : std::get<0>(target)) {
+          triangles += nw::graph::intersection_size(std::get<1>(target), G[v]);
+        }
+      }
+      return triangles;
+    }
+
+    template <typename Graph>
+    struct triangle_count_action_1
+      : hpx::actions::action<decltype(&triangle_counter_1<Graph>), &triangle_counter_1<Graph>,
+                             triangle_count_action_1<Graph>> {};
   } // namespace detail
 
   /**

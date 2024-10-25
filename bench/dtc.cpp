@@ -371,6 +371,10 @@ void run_bench(int argc, char* argv[]) {
     auto cel_a = distribute_compressed(num_vertices(el_a), num_edges(el_a), l_cel_a,
                                        std::move(cvert_sizes), std::move(cedge_sizes));
 
+    // free memory
+    el_a = edge_list<nw::graph::directedness::undirected>{};
+    l_cel_a = Graph{};
+
     //    if (debug) {
     // cel_a.stream_indices();
     //}

@@ -55,14 +55,14 @@ namespace nw::graph {
         std::uint32_t this_locality_id = hpx::get_locality_id();
 
         using vertex_id_type = typename Graph::vertex_id_type;
-        using target_list_t =
-          std::vector<std::tuple<vertex_id_type, std::vector<std::tuple<vertex_id_type>>>>;
+        using target_list_t = std::vector<
+          std::tuple<std::vector<vertex_id_type>, std::vector<std::tuple<vertex_id_type>>>>;
         using remote_counts_t = std::map<hpx::id_type, target_list_t>;
 
         // use half of the available cores for parallelizing the loop
         auto p = hpx::execution::par;
         size_t const cores = hpx::parallel::execution::processing_units_count(
-          p.parameters(), p.executor(), hpx::chrono::null_duration, last_index - first_index);
+          p, hpx::chrono::null_duration, last_index - first_index);
         auto policy = hpx::parallel::execution::with_processing_units_count(
           p, (std::max)(cores / 2, size_t(1)));
 
@@ -76,9 +76,9 @@ namespace nw::graph {
           std::vector<vertex_id_type> v_targets;
           std::vector<std::tuple<vertex_id_type>> neighbors;
 
-          for (auto elt = neighbor_range.begin(); elt != neighbor_range.end(); ++elt) {
+          for (auto const& edge : neighbor_range) {
 
-            vertex_id_type v = target(G, *elt);
+            vertex_id_type v = target(G, edge);
 
             if (is_same_locality(this_locality_id, G, v)) {
               // handle things locally
@@ -89,29 +89,38 @@ namespace nw::graph {
               v_targets.push_back(v);
             }
 
-            // collect all neighbor vertex ids for v_it
+            // collect all neighbor vertex ids for current vertex
             neighbors.push_back(std::make_tuple(v));
           }
 
-          // launch the remote operations for the current vertex (if any)
-          if (!v_targets.empty()) {
-            auto& rc = remote_counts.get();
+          auto& rc = remote_counts.get();
+          std::get<0>(rc) += triangles;
 
+          // launch remote operations for the current vertex (if any)
+          if (!v_targets.empty()) {
+
+            // first, collect all vertices with the same neighbors for each locality
+            std::map<hpx::id_type, std::vector<vertex_id_type>> target_vertices;
             for (auto v : v_targets) {
               auto id = vertex_locality(G, v);
+              target_vertices[id].push_back(v);
+            }
+
+            // now store this vertex list in collection of messages to send
+            for (auto&& [id, vertices] : target_vertices) {
               auto& targets = std::get<1>(rc)[id];
 
               // if batch size has been reached, trigger async operation
               if (targets.size() >= batchsize) {
-                triangle_count_action<Graph> act;
+                triangle_count_action_1<Graph> act;
                 std::get<2>(rc).push_back(hpx::async(act, id, hpx::ref(G), std::move(targets)));
                 targets = target_list_t{};
               }
 
-              targets.push_back(std::make_tuple(v, neighbors));
+              // store list of vertices with their neighbors in any case
+              targets.push_back(std::make_tuple(std::move(vertices), neighbors));
             }
           }
-          std::get<0>(remote_counts.get()) += triangles;
         };
         hpx::for_each(policy, first, last, tc);
 
@@ -127,10 +136,11 @@ namespace nw::graph {
 
             // send remaining pending messages
             for (auto&& [id, targets] : std::get<1>(data)) {
-              triangle_count_action<Graph> act;
+              triangle_count_action_1<Graph> act;
               counts.push_back(hpx::async(act, id, hpx::ref(G), std::move(targets)));
             }
 
+            // keep track of pending operations
             std::move(std::get<2>(data).begin(), std::get<2>(data).end(),
                       std::back_inserter(counts));
           });
