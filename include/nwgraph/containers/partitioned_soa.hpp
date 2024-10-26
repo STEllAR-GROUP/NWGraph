@@ -225,24 +225,24 @@ namespace nw::graph {
     //: base(hpx::partitioned_vector<Attributes>(M)...) {}
 
     template <std::size_t I>
-    std::string generate_name(char const* name) {
-      return std::string(name) + std::to_string(I);
+    static std::string generate_name(std::string const& name) {
+      return name + std::to_string(I);
     }
 
     template <std::size_t... Is, typename... Ts>
-    void register_as(char const* name, std::index_sequence<Is...>, std::tuple<Ts...>& ts) {
+    static void register_as(std::string name, std::index_sequence<Is...>, std::tuple<Ts...>& ts) {
       (std::get<Is>(ts).register_as(hpx::launch::sync, generate_name<Is>(name)), ...);
     }
 
     template <typename Vector>
     explicit partitioned_struct_of_arrays(
-      size_t M, Vector&& sizes, char const* name,
+      size_t M, Vector&& sizes, std::string name,
       std::vector<hpx::id_type> const& localities = hpx::find_all_localities())
       : base(hpx::partitioned_vector<Attributes>(
           M, hpx::explicit_container_layout(std::forward<Vector>(sizes), localities))...) {
 
       using pack = std::make_index_sequence<sizeof...(Attributes)>;
-      register_as(name, pack{}, static_cast<base&>(*this));
+      register_as(std::move(name), pack{}, static_cast<base&>(*this));
     }
 
     // shallow copy constructor, shallow-copies partitioned vectors

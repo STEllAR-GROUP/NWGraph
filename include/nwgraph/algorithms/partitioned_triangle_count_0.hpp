@@ -7,9 +7,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * @authors
- *   Andrew Lumsdaine
- *   Tony Liu
- *   Kevin Deweese
+ *   Hartmut Kaiser
  *
  */
 

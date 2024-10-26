@@ -22,6 +22,8 @@
 #include "nwgraph/adjacency.hpp"
 #include "nwgraph/containers/partitioned_compressed.hpp"
 
+//#include "nwgraph/partitioned_build.hpp"
+
 #include <array>
 #include <concepts>
 
@@ -88,6 +90,11 @@ using compressed = partitioned_index_compressed<default_index_t, default_vertex_
       : unipartite_graph_base(static_cast<unipartite_graph_base const&>(rhs))
       , base(static_cast<base const&>(rhs), make_unmanaged) {}
 
+    template <std::size_t I>
+    static std::string generate_name(std::string const& name) {
+      return name + std::to_string(I);
+    }
+
   public:
     using index_t = index_type;
     using vertex_id_type = vertex_id;
@@ -111,13 +118,20 @@ using compressed = partitioned_index_compressed<default_index_t, default_vertex_
       std::vector<hpx::id_type> const& localities = hpx::find_all_localities())
       requires(std::is_same_v<unipartite_graph_base, unipartite_graph_base>)
       : unipartite_graph_base(N)
-      , base(N, M, std::forward<Vector>(index_sizes), std::forward<Vector>(to_be_index_sizes), name,
-             localities) {}
+      , base(N, N + 1, M, std::forward<Vector>(index_sizes),
+             std::forward<Vector>(to_be_index_sizes), generate_name<idx>(name), localities) {}
+
+    template <typename Vector>
+    partitioned_index_adjacency(
+      size_t N, size_t N1, size_t M, Vector&& index_sizes, Vector&& to_be_index_sizes, char const* name = "pg",
+      std::vector<hpx::id_type> const& localities = hpx::find_all_localities())
+      requires(std::is_same_v<unipartite_graph_base, unipartite_graph_base>)
+      : unipartite_graph_base(N)
+      , base(N, N1, M, std::forward<Vector>(index_sizes),
+             std::forward<Vector>(to_be_index_sizes), generate_name<idx>(name), localities) {}
 
     // Create reference to partitioned_index_adjacency
-    partitioned_index_adjacency ref() const {
-      return partitioned_index_adjacency(*this, true);
-    }
+    partitioned_index_adjacency ref() const { return partitioned_index_adjacency(*this, true); }
 
     /**
      * @brief Constructor of partitioned_index_adjacency. Require the type of the graph to be
@@ -127,15 +141,20 @@ using compressed = partitioned_index_compressed<default_index_t, default_vertex_
     //  requires(std::is_same<unipartite_graph_base, unipartite_graph_base>::value) :
     //  unipartite_graph_base(N), base(N[0], M) {}
 
-    // template <class ExecutionPolicy = std::execution::parallel_unsequenced_policy>
-    // partitioned_index_adjacency(index_edge_list<vertex_id_type, unipartite_graph_base,
-    //                                             directedness::directed, Attributes...>& A,
-    //                             bool sort_adjacency = false, ExecutionPolicy&& policy = {})
-    //   requires(std::is_same_v<unipartite_graph_base, unipartite_graph_base>)
-    //   : unipartite_graph_base(A.num_vertices()[0])
-    //   , base(A.num_vertices()[0] + 1) {
-    //   fill<idx>(A, *this, sort_adjacency, policy);
-    // }
+    template <typename Vector, class ExecutionPolicy = std::execution::parallel_unsequenced_policy>
+    partitioned_index_adjacency(
+      index_edge_list<vertex_id_type, unipartite_graph_base, directedness::directed, Attributes...>&
+        A,
+      Vector&& index_sizes, Vector&& to_be_index_sizes, bool sort_adjacency = false,
+      ExecutionPolicy&& policy = {}, char const* name = "pg",
+      std::vector<hpx::id_type> const& localities = hpx::find_all_localities())
+      requires(std::is_same_v<unipartite_graph_base, unipartite_graph_base>)
+      : unipartite_graph_base(A.num_vertices()[0])
+      , base(A.num_vertices()[0] + 1, A.num_vertices()[0] + 1, A.num_edges(),
+             std::forward<Vector>(index_sizes), std::forward<Vector>(to_be_index_sizes),
+             generate_name<idx>(name), localities) {
+      //partitioned_fill<idx>(A, *this, sort_adjacency, policy);
+    }
 
     // template <class ExecutionPolicy = std::execution::parallel_unsequenced_policy>
     // partitioned_index_adjacency(index_edge_list<vertex_id_type, unipartite_graph_base,

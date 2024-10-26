@@ -123,15 +123,15 @@ namespace nw::graph {
 
     template <typename Vector>
     partitioned_indexed_struct_of_arrays(
-      size_t N, size_t M, Vector&& index_sizes, Vector&& to_be_index_sizes, char const* name,
+      size_t N, size_t N1, size_t M, Vector&& index_sizes, Vector&& to_be_index_sizes, std::string name,
       std::vector<hpx::id_type> const& localities = hpx::find_all_localities())
       : N_(N)
-      , indices_(N + 1,
+      , indices_(N1,
                  hpx::explicit_container_layout(
                    increment_last_partition(std::forward<Vector>(index_sizes)), localities))
       , to_be_indexed_(M, std::forward<Vector>(to_be_index_sizes), name, localities) {
 
-      indices_.register_as(hpx::launch::sync, name);
+      indices_.register_as(hpx::launch::sync, std::move(name));
     }
 
     // shallow copy constructor, shallow-copies partitioned vectors

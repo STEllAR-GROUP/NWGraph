@@ -1,5 +1,5 @@
 /**
- * @file triangle_count.hpp
+ * @file partitioned_algorithm.hpp
  *
  * @copyright SPDX-FileCopyrightText: 2022 Battelle Memorial Institute
  * @copyright SPDX-FileCopyrightText: 2022 University of Washington
@@ -7,9 +7,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * @authors
- *   Andrew Lumsdaine
- *   Tony Liu
- *   Kevin Deweese
+ *   Hartmut Kaiser
  *
  */
 
@@ -41,6 +39,13 @@ namespace nw::graph {
     hpx::id_type vertex_locality(Graph const& G, Vertex v) {
       using traits = hpx::traits::segmented_iterator_traits<decltype(G.begin().index())>;
       return hpx::naming::get_locality_from_id(
+        traits::get_id(traits::segment((G.begin() + v).index())));
+    }
+
+    template <typename Graph, typename Vertex>
+    std::uint32_t vertex_locality_id(Graph const& G, Vertex v) {
+      using traits = hpx::traits::segmented_iterator_traits<decltype(G.begin().index())>;
+      return hpx::naming::get_locality_id_from_id(
         traits::get_id(traits::segment((G.begin() + v).index())));
     }
 

@@ -148,12 +148,12 @@ struct zipped : std::tuple<Ranges&...> {
 
     reference operator*() const {
       return std::apply(
-          [this]<class... Vectors>(Vectors && ... v) { return reference(std::forward<Vectors>(v)[i_]...); }, *soa_);
+          [this]<class... Vectors>(Vectors && ... v) { return reference(std::forward<Vectors>(v)[i_]...); }, static_cast<base const&>(*soa_));
     }
 
     reference operator[](std::ptrdiff_t n) const {
       return std::apply(
-          [this, n]<class... Vectors>(Vectors && ... v) { return reference(std::forward<Vectors>(v)[i_ + n]...); }, *soa_);
+          [this, n]<class... Vectors>(Vectors && ... v) { return reference(std::forward<Vectors>(v)[i_ + n]...); }, static_cast<base const&>(*soa_));
     }
 
     pointer operator->() const {

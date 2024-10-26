@@ -34,8 +34,26 @@
 #include <hpx/execution.hpp>
 #include <hpx/algorithm.hpp>
 #endif
+
+#if defined(_MSC_VER)
+#include <concurrent_vector.h>
+#include <concurrent_queue.h>
+namespace nw::graph::util {
+  template<typename T, typename Alloc = ::std::allocator<T>>
+  using concurrent_vector = Concurrency::concurrent_vector<T, Alloc>;
+  template<typename T, typename Alloc = ::std::allocator<T>>
+  using concurrent_queue = Concurrency::concurrent_queue<T, Alloc>;
+}
+#else
 #include <tbb/concurrent_vector.h>
 #include <tbb/concurrent_queue.h>
+namespace nw::graph::util {
+  template<typename T, typename Alloc = ::std::allocator<T>>
+  using concurrent_vector = tbb::concurrent_vector<T, Alloc>;
+  template<typename T, typename Alloc = ::std::allocator<T>>
+  using concurrent_queue = tbb::concurrent_queue<T, Alloc>;
+}
+#endif
 
 /**
  * @file bfs.hpp
@@ -172,7 +190,7 @@ template <adjacency_list_graph OutGraph, adjacency_list_graph InGraph>
   const std::size_t                                   n = nw::graph::pow2(nw::graph::ceil_log2(num_bins));
   const std::size_t                                   N = num_vertices(out_graph);
   const std::size_t                                   M = out_graph.to_be_indexed_.size();
-  std::vector<tbb::concurrent_vector<vertex_id_type>> q1(n), q2(n);
+  std::vector<nw::graph::util::concurrent_vector<vertex_id_type>> q1(n), q2(n);
 
   std::vector<vertex_id_type> parents(N);
   nw::graph::AtomicBitVector  front(N, false);

@@ -31,7 +31,6 @@
 #include <tbb/concurrent_vector.h>
 #include <tbb/parallel_for_each.h>
 #elif NWGRAPH_HAVE_HPX
-#include <tbb/concurrent_vector.h>
 #include <hpx/algorithm.hpp>
 #endif
 
@@ -42,7 +41,7 @@ template <adjacency_list_graph Graph>
 auto bfs_v4(const Graph& graph, typename graph_traits<Graph>::vertex_id_type root) {
   using vertex_id_type = typename graph_traits<Graph>::vertex_id_type;
 
-  tbb::concurrent_queue<vertex_id_type> q1, q2;
+  nw::graph::util::concurrent_queue<vertex_id_type> q1, q2;
   std::vector                       level(graph.max() + 1, std::numeric_limits<vertex_id_type>::max());
   std::vector                       parents(graph.max() + 1, std::numeric_limits<vertex_id_type>::max());
   size_t                            lvl = 0;
@@ -89,7 +88,7 @@ template <adjacency_list_graph Graph>
 auto bfs_v6(const Graph& graph, typename graph_traits<Graph>::vertex_id_type root) {
   using vertex_id_type = typename graph_traits<Graph>::vertex_id_type;
 
-  tbb::concurrent_vector<vertex_id_type> q1, q2;
+  nw::graph::util::concurrent_vector<vertex_id_type> q1, q2;
   std::vector<vertex_id_type>            level(num_vertices(graph), std::numeric_limits<vertex_id_type>::max());
   std::vector<vertex_id_type>            parents(num_vertices(graph), std::numeric_limits<vertex_id_type>::max());
   size_t                                 lvl = 0;
@@ -135,7 +134,7 @@ template <adjacency_list_graph Graph>
 auto bfs_v7(const Graph& graph, typename graph_traits<Graph>::vertex_id_type root) {
   using vertex_id_type = typename graph_traits<Graph>::vertex_id_type;
 
-  tbb::concurrent_vector<vertex_id_type>   q1, q2;
+  nw::graph::util::concurrent_vector<vertex_id_type>   q1, q2;
   std::vector<std::atomic<vertex_id_type>> level(num_vertices(graph));
   for (size_t i = 0; i < graph.size(); ++i) {
     level[i] = std::numeric_limits<vertex_id_type>::max();
@@ -206,7 +205,7 @@ auto bfs_v8(const Graph& graph, typename graph_traits<Graph>::vertex_id_type roo
 
   using vertex_id_type = typename graph_traits<Graph>::vertex_id_type;
 
-  tbb::concurrent_queue<vertex_id_type> q[2];// q1, q2;
+  nw::graph::util::concurrent_queue<vertex_id_type> q[2];// q1, q2;
   std::vector                       level(num_vertices(graph), std::numeric_limits<vertex_id_type>::max());
   std::vector                       parents(num_vertices(graph), std::numeric_limits<vertex_id_type>::max());
   size_t                            lvl = 0;
@@ -245,7 +244,7 @@ auto bfs_v9(const Graph& graph, typename graph_traits<Graph>::vertex_id_type roo
   const size_t                                        num_bins = 32;
   const size_t                                        bin_mask = 0x1F;
 #if NWGRAPH_HAVE_TBB
-  std::vector<tbb::concurrent_vector<vertex_id_type>> q1(num_bins), q2(num_bins);
+  std::vector<nw::graph::util::concurrent_vector<vertex_id_type>> q1(num_bins), q2(num_bins);
 #else
   std::vector<std::vector<vertex_id_type>> q1(num_bins), q2(num_bins);
 #endif
@@ -262,7 +261,7 @@ auto bfs_v9(const Graph& graph, typename graph_traits<Graph>::vertex_id_type roo
   while (!done) {
     std::for_each(std::execution::par_unseq, q1.begin(), q1.end(), [&](auto& q) {
       std::for_each(std::execution::par_unseq, q.begin(), q.end(), [&](vertex_id_type u) {
-        tbb::parallel_for(graph[u], [&](auto&& gu) {
+        nw::graph::util::parallel_for(graph[u], [&](auto&& gu) {
           std::for_each(gu.begin(), gu.end(), [&](auto&& x) {
             vertex_id_type v = target(graph, x);
             if (level[v] == std::numeric_limits<vertex_id_type>::max()) {
@@ -300,8 +299,8 @@ template <adjacency_list_graph Graph>
 
   constexpr const std::size_t                         num_bins = 32;
   const std::size_t                                   N        = num_vertices(graph);
-  std::vector<tbb::concurrent_vector<vertex_id_type>> q1(num_bins);
-  std::vector<tbb::concurrent_vector<vertex_id_type>> q2(num_bins);
+  std::vector<nw::graph::util::concurrent_vector<vertex_id_type>> q1(num_bins);
+  std::vector<nw::graph::util::concurrent_vector<vertex_id_type>> q2(num_bins);
   std::vector<vertex_id_type>                         parents(N);
 
   constexpr const auto null_vertex = null_vertex_v<vertex_id_type>();
@@ -347,8 +346,8 @@ template <adjacency_list_graph Graph>
 
   constexpr const std::size_t                         num_bins = 32;
   const std::size_t                                   N        = num_vertices(graph);
-  std::vector<tbb::concurrent_vector<vertex_id_type>> q1(num_bins);
-  std::vector<tbb::concurrent_vector<vertex_id_type>> q2(num_bins);
+  std::vector<nw::graph::util::concurrent_vector<vertex_id_type>> q1(num_bins);
+  std::vector<nw::graph::util::concurrent_vector<vertex_id_type>> q2(num_bins);
   std::vector<vertex_id_type>                         parents(N);
   nw::graph::AtomicBitVector                          visited(N);
 
@@ -405,8 +404,8 @@ template <adjacency_list_graph Graph, adjacency_list_graph Transpose>
 
   parents[root] = root;
   next.set(root);
-  for (vertex_id_type n = 1; n != 0; n = tbb::parallel_reduce(
-                                         tbb::blocked_range(0ul, N), 0,
+  for (vertex_id_type n = 1; n != 0; n = nw::graph::util::parallel_reduce(
+                                         nw::graph::util::blocked_range(0ul, N), 0,
                                          [&](auto&&range, auto n) {
                                            for (auto &&v = range.begin(), e = range.end(); v != e; ++v) {
                                              if (parents[v] == null_vertex) {
@@ -462,7 +461,7 @@ nw::graph::AtomicBitVector<>& front, nw::graph::AtomicBitVector<>& next) {
         });
     return count;
 #elif NWGRAPH_HAVE_TBB
-  return tbb::parallel_reduce(
+  return nw::graph::util::parallel_reduce(
       nw::graph::neighbor_range(g), 0ul,
       [&](auto&& range, auto n) {
           for (auto&& b = range.begin(); b < range.end(); ++b) {
@@ -516,10 +515,10 @@ size_t TD_step(const Graph& g, std::vector<vertex_id_t<Graph>>& parents,
             scout_count += n;
 		});
 #elif NWGRAPH_HAVE_TBB
-  scout_count = tbb::parallel_reduce(
-      tbb::blocked_range<std::size_t>(0ul, N), 0ul,
+  scout_count = nw::graph::util::parallel_reduce(
+      nw::graph::util::blocked_range<std::size_t>(0ul, N), 0ul,
       [&](auto&& range, auto n) {
-          int worker_index = tbb::this_task_arena::current_thread_index();
+          int worker_index = nw::graph::util::this_task_arena::current_thread_index();
           for (auto&& i = range.begin(), e = range.end(); i != e; ++i) {
               auto u = cur[i];
               for (auto&& elt : g[u]) {
@@ -562,8 +561,8 @@ inline void bitmap_to_queue(nw::graph::AtomicBitVector<>& bitmap, std::vector<Ve
         lqueue[worker_index].push_back(i);
     });
 #elif NWGRAPH_HAVE_TBB
-    tbb::parallel_for(bitmap.non_zeros(nw::graph::pow2(15)), [&](auto&& range) {
-        int worker_index = tbb::this_task_arena::current_thread_index();
+    nw::graph::util::parallel_for(bitmap.non_zeros(nw::graph::pow2(15)), [&](auto&& range) {
+        int worker_index = nw::graph::util::this_task_arena::current_thread_index();
         for (auto&& i = range.begin(), e = range.end(); i != e; ++i) {
             lqueue[worker_index].push_back(*i);
         }
@@ -672,8 +671,8 @@ template <adjacency_list_graph OutGraph, adjacency_list_graph InGraph>
         }
         });
 #elif NWGRAPH_HAVE_TBB
-        awake_count = tbb::parallel_reduce(
-            tbb::blocked_range<std::size_t>(0ul, N), 0ul,
+        awake_count = nw::graph::util::parallel_reduce(
+            nw::graph::util::blocked_range<std::size_t>(0ul, N), 0ul,
             [&](auto&& range, auto n) {
               for (auto&& u = range.begin(), e = range.end(); u != e; ++u) {
                 if (null_vertex == parents[u]) {
@@ -724,9 +723,9 @@ template <adjacency_list_graph OutGraph, adjacency_list_graph InGraph>
             count += local_count;
 		});
 #elif NWGRAPH_HAVE_TBB
-	scout_count = tbb::parallel_reduce(tbb::blocked_range<std::size_t>(0ul, queue.size()), 0ul,
+	scout_count = nw::graph::util::parallel_reduce(nw::graph::util::blocked_range<std::size_t>(0ul, queue.size()), 0ul,
 		[&](auto&& range, auto count) {
-			int worker_index = tbb::this_task_arena::current_thread_index();
+			int worker_index = nw::graph::util::this_task_arena::current_thread_index();
 			for (auto&& i = range.begin(), e = range.end(); i != e; ++i) {
 				auto u = queue[i];
 				for (auto&& elt : out_graph[u]) {
