@@ -59,9 +59,9 @@ namespace nw::graph {
 
         // use half of the available cores for parallelizing the loop
         auto p = hpx::execution::par;
-        size_t const cores = hpx::parallel::execution::processing_units_count(
+        size_t const cores = hpx::execution::experimental::processing_units_count(
           p, hpx::chrono::null_duration, last_index - first_index);
-        auto policy = hpx::parallel::execution::with_processing_units_count(
+        auto policy = hpx::execution::experimental::with_processing_units_count(
           p, (std::max)(cores / 2, size_t(1)));
 
         // for each v in G do
