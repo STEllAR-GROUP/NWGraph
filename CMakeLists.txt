@@ -198,6 +198,8 @@ if (NWGRAPH_BUILD_HPEC)
    add_subdirectory(${CMAKE_SOURCE_DIR}/../Artifacts/hpec hpec)
 endif()
 
+add_subdirectory(util)
+
 # Set up testing after all other includes (so third-party tests aren't included)
 if (NWGRAPH_BUILD_TESTS)
 #  enable_testing()

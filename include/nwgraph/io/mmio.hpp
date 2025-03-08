@@ -40,7 +40,9 @@
 namespace nw {
 namespace graph {
 
-void mm_fill(std::istream& inputStream, bi_edge_list<directedness::directed>& A, size_t nNonzeros, bool file_symmetry, bool pattern) {
+template <typename Predicate>
+  void mm_fill(std::istream& inputStream, bi_edge_list<directedness::directed>& A, size_t nNonzeros,
+    bool file_symmetry, bool pattern, Predicate pred = [](size_t d0, size_t d1) { return true; }) {
   A.reserve((file_symmetry ? 2 : 1) * nNonzeros);
   A.open_for_push_back();
   for (size_t i = 0; i < nNonzeros; ++i) {
@@ -49,6 +51,9 @@ void mm_fill(std::istream& inputStream, bi_edge_list<directedness::directed>& A,
 
     std::getline(inputStream, buffer);
     std::stringstream(buffer) >> d0 >> d1;
+
+    if (!pred(d0-1, d1-1))
+      continue; 
 
     A.push_back(d0-1, d1-1);
 
@@ -59,8 +64,10 @@ void mm_fill(std::istream& inputStream, bi_edge_list<directedness::directed>& A,
   A.close_for_push_back();
 }
 
-template <typename T>
-void mm_fill(std::istream& inputStream, bi_edge_list<directedness::directed, T>& A, size_t nNonzeros, bool file_symmetry, bool pattern) {
+template <typename T, typename Predicate>
+void mm_fill(std::istream& inputStream, bi_edge_list<directedness::directed, T>& A, size_t nNonzeros,
+  bool file_symmetry, bool pattern,
+  Predicate pred = [](size_t d0, size_t d1, T v) { return true; }) {
 
   A.reserve((file_symmetry ? 2 : 1) * nNonzeros);
   A.open_for_push_back();
@@ -76,6 +83,9 @@ void mm_fill(std::istream& inputStream, bi_edge_list<directedness::directed, T>&
       std::stringstream(buffer) >> d0 >> d1 >> v;
     }
 
+    if (!pred(d0-1, d1-1, v))
+      continue;
+
     A.push_back(d0-1, d1-1, v);
 
     if (file_symmetry && (d0 != d1)) {
@@ -85,7 +95,9 @@ void mm_fill(std::istream& inputStream, bi_edge_list<directedness::directed, T>&
   A.close_for_push_back();
 }
 
-void mm_fill(std::istream& inputStream, edge_list<directedness::directed>& A, size_t nNonzeros, bool file_symmetry, bool pattern) {
+template <typename Predicate>
+void mm_fill(std::istream& inputStream, edge_list<directedness::directed>& A, size_t nNonzeros,
+  bool file_symmetry, bool pattern, Predicate pred = [](size_t d0, size_t d1) { return true; }) {
   A.reserve((file_symmetry ? 2 : 1) * nNonzeros);
   A.open_for_push_back();
   for (size_t i = 0; i < nNonzeros; ++i) {
@@ -94,6 +106,9 @@ void mm_fill(std::istream& inputStream, edge_list<directedness::directed>& A, si
 
     std::getline(inputStream, buffer);
     std::stringstream(buffer) >> d0 >> d1;
+
+    if (!pred(d0-1, d1-1))
+      continue;
 
     A.push_back(d0-1, d1-1);
 
@@ -104,8 +119,9 @@ void mm_fill(std::istream& inputStream, edge_list<directedness::directed>& A, si
   A.close_for_push_back();
 }
 
-template <typename T>
-void mm_fill(std::istream& inputStream, edge_list<directedness::directed, T>& A, size_t nNonzeros, bool file_symmetry, bool pattern) {
+template <typename T, typename Predicate>
+void mm_fill(std::istream& inputStream, edge_list<directedness::directed, T>& A, size_t nNonzeros,
+  bool file_symmetry, bool pattern, Predicate pred = [](size_t d0, size_t d1, T v) { return true; }) {
 
   A.reserve((file_symmetry ? 2 : 1) * nNonzeros);
   A.open_for_push_back();
@@ -121,6 +137,9 @@ void mm_fill(std::istream& inputStream, edge_list<directedness::directed, T>& A,
       std::stringstream(buffer) >> d0 >> d1 >> v;
     }
 
+    if (!pred(d0-1, d1-1, v))
+      continue;
+
     A.push_back(d0-1, d1-1, v);
 
     if (file_symmetry && (d0 != d1)) {
@@ -130,7 +149,11 @@ void mm_fill(std::istream& inputStream, edge_list<directedness::directed, T>& A,
   A.close_for_push_back();
 }
 
-void mm_fill(std::istream& inputStream, edge_list<directedness::undirected>& A, size_t nNonzeros, bool file_symmetry, bool pattern) {
+template <typename Predicate>
+void mm_fill(
+  std::istream& inputStream, edge_list<directedness::undirected>& A, size_t nNonzeros,
+  bool file_symmetry, bool pattern,
+  Predicate pred = [](size_t d0, size_t d1, double d2) { return true; }) {
 
   A.reserve(nNonzeros);
   A.open_for_push_back();
@@ -145,13 +168,19 @@ void mm_fill(std::istream& inputStream, edge_list<directedness::undirected>& A, 
       inputStream >> d0 >> d1 >> d2;
     }
 
+    if (!pred(d0-1, d1-1, d2))
+      continue;
+
     A.push_back(d0-1, d1-1);
   }
   A.close_for_push_back();
 }
 
-template <typename T>
-void mm_fill(std::istream& inputStream, edge_list<directedness::undirected, T>& A, size_t nNonzeros, bool file_symmetry, bool pattern) {
+template <typename T, typename Predicate>
+void mm_fill(
+  std::istream& inputStream, edge_list<directedness::undirected, T>& A, size_t nNonzeros,
+  bool file_symmetry, bool pattern,
+  Predicate pred = [](size_t d0, size_t d1, T v) { return true; }) {
   // assert(file_symmetry);
   A.reserve(nNonzeros);
   A.open_for_push_back();
@@ -165,13 +194,17 @@ void mm_fill(std::istream& inputStream, edge_list<directedness::undirected, T>& 
     } else {
       std::stringstream(buffer) >> d0 >> d1 >> v;
     }
+    if (!pred(d0-1, d1-1, v))
+      continue;
     A.push_back(d0-1, d1-1, v);
   }
   A.close_for_push_back();
 }
 
-template <directedness sym, typename... Attributes>
-edge_list<sym, Attributes...> read_mm(std::istream& inputStream) {
+
+template <typename Predicate, directedness sym, typename... Attributes>
+edge_list<sym, Attributes...> read_mm_impl(
+  std::istream& inputStream, Predicate& pred) {
   std::string              string_input;
   bool                     file_symmetry = false;
   std::vector<std::string> header(5);
@@ -188,7 +221,8 @@ edge_list<sym, Attributes...> read_mm(std::istream& inputStream) {
   }
   if (header[4] == "symmetric") {
     file_symmetry = true;
-  } else if (header[4] == "general") {
+  }
+  else if (header[4] == "general" || header[4] == "asymmetric") {
     file_symmetry = false;
   } else {
     std::cerr << "Bad format (symmetry): " << header[4] << std::endl;
@@ -203,20 +237,44 @@ edge_list<sym, Attributes...> read_mm(std::istream& inputStream) {
 
   // assert(n0 == n1);
 
-  edge_list<sym, Attributes...> A(n0);
-  mm_fill(inputStream, A, nNonzeros, file_symmetry, (header[3] == "pattern"));
+  edge_list<sym, Attributes...> A{};
+  mm_fill(inputStream, A, nNonzeros, file_symmetry, (header[3] == "pattern"), pred);
 
   return A;
+}
+
+template <directedness sym, typename... Attributes>
+edge_list<sym, Attributes...> read_mm(std::istream& inputStream) {
+  auto pred = [](auto... x) { return true; };
+  return read_mm_impl<decltype(pred), sym, Attributes...>(inputStream, pred);
+}
+
+template <typename Predicate, directedness sym, typename... Attributes>
+edge_list<sym, Attributes...> read_mm(std::istream& inputStream, Predicate& pred) {
+  return read_mm_impl<decltype(pred), sym, Attributes...>(inputStream, pred);
 }
 
 template <directedness sym, typename... Attributes>
 edge_list<sym, Attributes...> read_mm(const std::string& filename) {
   std::ifstream inputFile(filename);
 
-  edge_list<sym, Attributes...> A = read_mm<sym, Attributes...>(inputFile);
+  auto pred = [](auto... x) { return true; };
+  edge_list<sym, Attributes...> A =
+      read_mm_impl<decltype(pred), sym, Attributes...>(inputFile, pred);
 
   return A;
 }
+
+template <typename Predicate, directedness sym, typename... Attributes>
+edge_list<sym, Attributes...> read_mm(const std::string& filename, Predicate& pred) {
+  std::ifstream inputFile(filename);
+
+  edge_list<sym, Attributes...> A =
+    read_mm_impl<decltype(pred), sym, Attributes...>(inputFile, pred);
+
+  return A;
+}
+
 // TOFIX: Unused fttb, but will need modification to work on MSVC
 
 //template <directedness sym, typename... Attributes, edge_list_graph edge_list_t>
@@ -276,6 +334,42 @@ edge_list<sym, Attributes...> read_mm(const std::string& filename) {
 //    throw;    
 //  }
 //}
+
+
+std::tuple<size_t, size_t, size_t> read_mm_metadata(std::istream& inputStream) {
+  std::string string_input;
+  // bool                     file_symmetry = false;
+  std::vector<std::string> header(5);
+
+  // %%MatrixMarket matrix coordinate integer symmetric
+  std::getline(inputStream, string_input);
+  std::stringstream h(string_input);
+  for (auto& s : header)
+    h >> s;
+
+  if (header[0] != "%%MatrixMarket") {
+    std::cerr << "Unsupported format" << std::endl;
+    throw;
+  }
+  // if (header[4] == "symmetric") {
+  //   file_symmetry = true;
+  // } else if (header[4] == "general") {
+  //   file_symmetry = false;
+  // } else {
+  //   std::cerr << "Bad format (symmetry): " << header[4] << std::endl;
+  //   throw;
+  // }
+
+  while (std::getline(inputStream, string_input)) {
+    if (string_input[0] != '%')
+      break;
+  }
+  size_t n0, n1, nNonzeros;
+  std::stringstream(string_input) >> n0 >> n1 >> nNonzeros;
+
+  return std::make_tuple(n0, n1, nNonzeros);
+}
+
 
 template <typename T>
 auto read_mm_vector(std::istream& inputStream) {

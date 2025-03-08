@@ -306,20 +306,20 @@ public:    // fixme
     }
   }
 
-  void serialize(std::ostream& outfile) {
+  void serialize(std::ostream& outfile) const {
     size_t el_size = sizeof(indices_[0]);
     size_t st_size = indices_.size();
 
     outfile.write(reinterpret_cast<const char*>(magic_), sizeof(magic_));
-    outfile.write(reinterpret_cast<char*>(&N_), sizeof(size_t));
+    outfile.write(reinterpret_cast<const char*>(&N_), sizeof(size_t));
 
-    outfile.write(reinterpret_cast<char*>(&st_size), sizeof(size_t));
-    outfile.write(reinterpret_cast<char*>(&el_size), sizeof(size_t));
-    outfile.write(reinterpret_cast<char*>(indices_.data()), st_size * el_size);
+    outfile.write(reinterpret_cast<const char*>(&st_size), sizeof(size_t));
+    outfile.write(reinterpret_cast<const char*>(&el_size), sizeof(size_t));
+    outfile.write(reinterpret_cast<const char*>(indices_.data()), st_size * el_size);
     to_be_indexed_.serialize(outfile);
   }
 
-  void serialize(const std::string& outfile_name) {
+  void serialize(const std::string& outfile_name) const {
     std::ofstream out_file(outfile_name, std::ofstream::binary);
     serialize(out_file);
   }
