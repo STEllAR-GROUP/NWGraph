@@ -42,6 +42,9 @@ static constexpr const char USAGE[] =
 
 #include "nwgraph/partitioned_adjacency.hpp"
 #include "nwgraph/algorithms/partitioned_page_rank_0.hpp"
+//#include "nwgraph/algorithms/page_rank.hpp"
+#include "nwgraph/experimental/algorithms/page_rank.hpp"
+
 
 #include <hpx/include/partitioned_vector.hpp>
 #include <nwgraph/util/partitioned_serialize.hpp>
@@ -78,6 +81,8 @@ int hpx_main(int argc, char* argv[]) {
   long num_partitions = args["--partitions"].asLong() ? args["--partitions"].asLong()
                                                       : hpx::get_num_localities(hpx::launch::sync);
 
+  std::cout << "Running on " << num_partitions << " partitions\n";
+
   std::vector files = args["-f"].asStringList();
   std::vector ids = parse_ids(args["--version"].asStringList());
   std::vector threads = parse_n_threads(args["THREADS"].asStringList());
@@ -85,19 +90,6 @@ int hpx_main(int argc, char* argv[]) {
   Times times;
 
   for (auto&& file : files) {
-    //auto aos_a = load_graph<nw::graph::directedness::directed>(file);
-    //if (verbose) {
-    //  aos_a.stream_stats();
-    //}
-
-    //auto graph = build_adjacency<1>(aos_a);
-    //if (verbose) {
-    //  graph.stream_stats();
-    //}
-
-    //if (debug) {
-    //  graph.stream_indices();
-    //}
 
     if (!segment_files_exist(file, num_partitions)) {
       std::cout << "segment files do not exist, creating them\n";
@@ -106,9 +98,20 @@ int hpx_main(int argc, char* argv[]) {
 
     auto graph = load_partitioned_adjacency(file, num_partitions);
 
-    auto degrees = build_degrees(graph);
-
     using vertex_id_type = typename decltype(graph)::vertex_id_type;
+
+    //auto degrees = build_degrees(graph);
+    std::vector<vertex_id_type> degrees(graph.size());
+
+    auto graph_size = graph.size();
+    for (auto i = 0; i < graph_size; ++i) {
+      auto neig_rng = graph[i];
+      for (auto&& [n0] : neig_rng) {
+        ++degrees[n0];
+      }
+    }
+
+
     using degree_type = typename decltype(degrees)::value_type;
 
     auto sizes = graph.indices_.get_partition_sizes();
@@ -150,10 +153,28 @@ int hpx_main(int argc, char* argv[]) {
             });
         }
 
-        //if (verify) {
-        //  std::cout << "Verifying\n";
-        //  print_n_ranks(rankings, 10);
-        //}
+        if (verify) {
+          std::cout << "Verifying..." << std::endl; 
+          auto aos_a = load_graph<nw::graph::directedness::directed>(file);
+          bool sort_adj = true;
+          auto graph = build_adjacency<0>(aos_a, sort_adj);
+
+          auto degrees = build_degrees(graph);
+
+          std::vector<float> local_rankings(graph.size());
+
+          page_rank_v1(graph, degrees, local_rankings, 0.85f, tolerance, max_iters);
+
+          float err_threshold = 1e-4; // arbitrary
+          float max_err = 0;
+          for (size_t i = 0; i < graph.size(); ++i) {
+            max_err = std::max(max_err, std::abs(p_rankings[i] - local_rankings[i]));
+          }
+          if (max_err > err_threshold) {
+            std::cerr << "Results do not match\n";
+          }
+
+        }
       }
     }
   }

@@ -1,5 +1,5 @@
 /**
- * @file triangle_count.hpp
+ * @file partitioned_page_rank_0.hpp
  *
  * @copyright SPDX-FileCopyrightText: 2022 Battelle Memorial Institute
  * @copyright SPDX-FileCopyrightText: 2022 University of Washington
@@ -9,7 +9,6 @@
  * @authors
  *   Hartmut Kaiser
  *   Panagiotis (Panos) Syskakis
- *
  */
 
 #ifndef NW_GRAPH_PARTITIONED_PAGE_RANK_0_HPP
@@ -37,16 +36,25 @@ namespace nw::graph {
 
   namespace detail {
 
-    ////////////////////////////////////////////////////////////////////////////
-    // handle incoming packets
-    template <typename Graph, typename Real>
-    static void do_page_rank_packet_0(
-      Graph G, std::vector<std::tuple<typename Graph::vertex_id_type, Real>> const& incoming_packet,
-      hpx::partitioned_vector<Real> accumulated_contributions) {
 
-      for (auto&& [v, incoming_val] : incoming_packet) {
-        accumulated_contributions[v] = incoming_val + accumulated_contributions[v];
+    template <typename Graph, typename Real>
+    using remote_results_type = std::vector<std::tuple<typename Graph::vertex_id_type, Real>>;
+
+    template <typename Graph, typename Real>
+    static remote_results_type<Graph, Real> do_page_rank_packet_0(
+      std::vector<std::tuple<typename Graph::vertex_id_type, typename Graph::vertex_id_type>>
+        incoming_packet, // TODO move semantics?
+      hpx::partitioned_vector<typename Real> page_rank,
+      hpx::partitioned_vector<typename Graph::vertex_id_type> degrees) {
+
+      remote_results_type<Graph, Real> results;
+      for (auto&& [v_dest, v_asked] : incoming_packet) {
+        auto deg_iter = degrees.get_local_iterator(v_asked).local();
+        auto pr_iter = page_rank.get_local_iterator(v_asked).local();
+        Real outgoing_contribution = *pr_iter / *deg_iter;
+        results.push_back(std::make_tuple(v_dest, outgoing_contribution));
       }
+      return results;
     }
 
     template <typename Graph, typename Real>
@@ -56,55 +64,53 @@ namespace nw::graph {
     };
 
     ////////////////////////////////////////////////////////////////////////////
-    struct page_rank_0 : hpx::parallel::detail::algorithm<page_rank_0, size_t> {
+    template <typename Real>
+    struct page_rank_0 : hpx::parallel::detail::algorithm<page_rank_0<Real>, Real> {
 
       // page rank driver for one of the partitions
       constexpr page_rank_0() noexcept
-        : hpx::parallel::detail::algorithm<page_rank_0, size_t>("page_rank_0") {}
+        : hpx::parallel::detail::algorithm<page_rank_0, Real>("page_rank_0") {}
+
 
       template <typename ExPolicy, typename Graph, typename Real>
-      static size_t sequential(ExPolicy&& policy, Graph G, const size_t first_index,
+      static Real sequential(ExPolicy&& policy, Graph G, const size_t first_index,
                                const size_t last_index,
                                hpx::partitioned_vector<typename Real> page_rank,
                                hpx::partitioned_vector<typename Real> accumulated_contributions,
-                               hpx::partitioned_vector<typename Graph::vertex_id_type> degrees) {
+                               hpx::partitioned_vector<typename Graph::vertex_id_type> degrees,
+                               Real base_score, Real damping_factor) {
 
         // Compute one Page-Rank iteration
         // For each local node, do:
-        // 1. Get contribution from neighbors
-        // 2.1 For remote neighbors, send action to each locality that has at least one neighbor,
+        // 1. Get contribution from neighbors. For each vertex, compute the outgoing contribution as page_rank[i] / degrees[i]
+        // 1.1 For remote neighbors, send action to each locality that has at least one neighbor,
         // and compute the contribution of that locality on this node. Send the result back to this
-        // locality. 2.2 For local neighbors, update contribution directly
-        // 3. Update page rank for each vertex using the formula: page_rank[i] = base_score +
+        // locality. 
+        // 1.2 For local neighbors, update contribution directly
+        // 2. Update page rank for each vertex using the formula: page_rank[i] = base_score +
         // damping_factor * z where z is the sum of contributions from all neighbors
-        // 4. For each vertex, compute the outgoing contribution as page_rank[i] / degrees[i]
-        // 5. Return the local accumulated error
+        // 3. Return the local accumulated error (sum of absolute difference between old and new page ranks)
+
+        std::uint32_t this_locality_id = hpx::get_locality_id();
 
         auto first = G.begin() + first_index;
         auto last = G.begin() + last_index;
 
-        std::uint32_t this_locality_id = hpx::get_locality_id();
+        auto acc_iter = accumulated_contributions.get_local_iterator(first_index).local();
 
         using vertex_id_type = typename Graph::vertex_id_type;
 
+        std::map<hpx::id_type, std::vector<std::tuple<vertex_id_type, vertex_id_type>>>
+          outgoing_packets;
 
-        std::map<hpx::id_type, std::vector<std::tuple<vertex_id_type, Real>>> outgoing_packets;
-        std::vector<hpx::future<void>> remote_ops;
+        std::vector<hpx::future<void>> remote_results;
         std::vector<vertex_id_type> v_targets;
 
+
         // for each v in G do
-        for (auto v_it = first; v_it != last; ++v_it) {
+        for (auto v_it = first; v_it != last; ++v_it, ++acc_iter) {
 
           v_targets.resize(0);
-
-          size_t v_idx = first_index + std::distance(first, v_it);
-
-          if (degrees[v_idx] == 0) {
-            // skip if no neighbors
-            continue;
-          }
-
-          Real v_out = page_rank[v_idx] / degrees[v_idx];
 
           auto neighbor_range = *v_it;
           for (auto elt = neighbor_range.begin(); elt != neighbor_range.end(); ++elt) {
@@ -113,7 +119,9 @@ namespace nw::graph {
 
             if (is_same_locality(this_locality_id, G, v)) {
               // handle things locally
-              accumulated_contributions[v] = v_out + accumulated_contributions[v];
+              auto pr_iter = page_rank.get_local_iterator(v).local();
+              auto deg_iter = degrees.get_local_iterator(v).local();
+              *acc_iter += *pr_iter / *deg_iter;
             }
             else {
               // send to elt's locality
@@ -121,31 +129,66 @@ namespace nw::graph {
             }
           }
 
-          // Store any outgoing contributions for this vertex
+          // Store which incoming contributions are needed for this vertex
+          vertex_id_type current_v_idx = v_it.index().get_global_index();
           if (!v_targets.empty()) {
             for (auto v : v_targets) {
               auto id = vertex_locality(G, v);
-              outgoing_packets[id].push_back(std::make_tuple(v, v_out));
+              outgoing_packets[id].push_back(std::make_tuple(current_v_idx, v));
             }
           }
         }
 
-        // Now send the outgoing contributions to the other localities
-        remote_ops.reserve(remote_ops.size() + outgoing_packets.size());
+        // Now request the contributions from other localities
+        remote_results.reserve(remote_results.size() + outgoing_packets.size());
 
         page_rank_action_0<Graph, Real> act;
+
         for (auto&& [id, targets] : outgoing_packets) {
-          remote_ops.push_back(hpx::async(act, id, hpx::ref(G), std::move(targets),
-                                          hpx::ref(accumulated_contributions)));
+          using remote_result_t = remote_results_type<Graph, Real>;
+
+          hpx::future<remote_result_t> f =
+            hpx::async(act, id, std::move(targets), hpx::ref(page_rank), hpx::ref(degrees));
+
+          auto f_cont = f.then(
+            [&accumulated_contributions](auto&& f)
+            {
+              remote_result_t incoming_packet = f.get();
+              for (auto&& [v, incoming_val] : incoming_packet) {
+                auto acc_iter = accumulated_contributions.get_local_iterator(v).local();
+                *acc_iter += incoming_val; // TODO make atomic
+              }
+            });
+
+          remote_results.emplace_back(std::move(f_cont));
         }
 
-
-        if (!remote_ops.empty()) {
+        if (!remote_results.empty()) {
           // wait for all remote operations to finish
-          hpx::wait_all(remote_ops);
+          hpx::wait_all(remote_results);
         }
 
-        return 0;
+        // (local) accumulated result is now fully computed
+        // update the local page rank
+        Real local_error = 0.0;
+
+        auto pr_iter = page_rank.get_local_iterator(first_index).local();
+        acc_iter = accumulated_contributions.get_local_iterator(first_index).local();
+
+        //vertex_id_type i = first_index;
+
+        for (auto v_it = first; v_it != last; ++v_it, ++pr_iter, ++acc_iter) {
+          Real z = *acc_iter;
+
+          //std::cout << "Node " << i++ << " : " << z << std::endl;
+
+          auto old_rank = *pr_iter;
+          *pr_iter = base_score + damping_factor * z;
+          local_error += fabs(*pr_iter - old_rank);
+          *acc_iter = 0.0;
+        }
+
+        return local_error;
       }
 
       template <typename ExPolicy, typename Graph, typename IterB, typename IterE>
@@ -154,67 +197,9 @@ namespace nw::graph {
       }
     };
 
-    ////////////////////////////////////////////////////////////////////////////
-    template <typename Real>
-    struct page_rank_reduce : hpx::parallel::detail::algorithm<page_rank_reduce<Real>, Real> {
-
-      constexpr page_rank_reduce() noexcept
-        : hpx::parallel::detail::algorithm<page_rank_reduce, Real>("page_rank_reduce") {}
-
-      template <typename ExPolicy, typename Graph>
-      static Real sequential(ExPolicy&& policy, Graph G, const size_t first_index,
-                             const size_t last_index,
-                             hpx::partitioned_vector<typename Real> page_rank,
-                             hpx::partitioned_vector<typename Real> accumulated_contributions,
-                             const Real base_score, const Real damping_factor) {
-        // Update page_rank using the accumulated contributions:
-        // page_rank[i] += damping_factor * accumulated_contributions[i]
-
-        auto first = G.begin() + first_index;
-        auto last = G.begin() + last_index;
-
-        std::uint32_t this_locality_id = hpx::get_locality_id();
-
-        using vertex_id_type = typename Graph::vertex_id_type;
-
-        Real local_error = 0.0;
-
-        // for each v in G do
-        for (auto v_it = first; v_it != last; ++v_it) {
-
-
-          size_t v_idx = first_index + std::distance(first, v_it);
-
-          Real old_pr = page_rank[v_idx];
-          page_rank[v_idx] = base_score + damping_factor * accumulated_contributions[v_idx];
-
-          // clear the accumulated contributions
-          accumulated_contributions[v_idx] = 0.0;
-
-          local_error += fabs(page_rank[v_idx] - old_pr);
-        }
-
-        return local_error;
-      }
-
-      template <typename ExPolicy, typename Graph>
-      static Real parallel(ExPolicy&& policy, Graph G, const size_t first_index,
-                           const size_t last_index) {
-        return 0;
-      }
-    };
 
     /// \endcond
   } // namespace detail
-
-  /**
-   * @brief Partitioned Page-Rank.
-   *
-   * @tparam Graph adjacency_list_graph
-   * @param G graph
-   * @param threads number of threads
-   * @return size_t number of triangles
-   */
 
   template <adjacency_list_graph Graph, typename Real = double>
   void partitioned_page_rank_0(Graph& G,
@@ -225,30 +210,31 @@ namespace nw::graph {
 
     auto sizes = G.indices_.get_partition_sizes();
 
-    // hpx::partitioned_vector<vertex_id_type> degrees(
-    //   size, std::numeric_limits<vertex_id_type>::max(),
-    //   hpx::explicit_container_layout(sizes, G.indices_.get_partition_localities()));
-    // degrees.register_as("degrees");
+    const Real init_score = 1.0 / G.size();
+    const Real base_score = (1.0 - damping_factor) / G.size();
 
-    const Real init_score = 1.0 / page_rank.size();
-    const Real base_score = (1.0 - damping_factor) / page_rank.size();
-
-    // Initialize page rank
+    // Initialize page ranks
     hpx::fill(hpx::execution::seq, page_rank.begin(), page_rank.end(), init_score);
 
-    hpx::partitioned_vector<Real> page_rank_accum(
+    hpx::partitioned_vector<Real> accummulating_contributions(
       G.indices_.size(), 0.0,
       hpx::explicit_container_layout(sizes, G.indices_.get_partition_localities()));
-    page_rank_accum.register_as("page_rank_accum");
+    accummulating_contributions.register_as("accummulating_contributions");
 
-    for (size_t i = 0; i < max_iters; i++) {
+    for (size_t iter = 0; iter < max_iters; ++iter) {
 
-      partitioned_algorithm<detail::page_rank_0>(hpx::execution::seq, G, hpx::ref(page_rank),
-                                                 hpx::ref(page_rank_accum), hpx::ref(degrees));
+    std::cout << "----- Iteration " << iter << " ----- " << std::endl;
 
-      auto errors = partitioned_algorithm<detail::page_rank_reduce<Real>>(
-        hpx::execution::seq, G, hpx::ref(page_rank), hpx::ref(page_rank_accum), base_score,
-        damping_factor);
+    for (auto i = 0; i < G.size(); ++i) {
+      std::cout << "Node " << i << " : " << page_rank[i] << std::endl;
+    }
+
+
+     auto errors = partitioned_algorithm<detail::page_rank_0<Real>>(
+        hpx::execution::seq, G, hpx::ref(page_rank),
+                                                 hpx::ref(accummulating_contributions),
+                                                 hpx::ref(degrees),
+                                                 base_score, damping_factor);
 
       auto error = std::transform_reduce(
         errors.begin(), errors.end(), Real(0.0), [](Real count, Real curr) { return count + curr; },

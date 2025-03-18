@@ -73,6 +73,8 @@ auto time_op(Op&& op) {
 }
 }    // namespace pagerank
 
+#if NWGRAPH_HAVE_TBB
+
 /**
  * @brief Parallel page rank.
  * 
@@ -146,6 +148,8 @@ template <adjacency_list_graph Graph, typename Real>
     }
   }
 }
+
+#endif
 
 }    // namespace graph
 }    // namespace nw
