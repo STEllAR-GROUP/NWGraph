@@ -44,7 +44,7 @@ namespace nw::graph {
     static remote_results_type<Graph, Real> do_page_rank_packet_0(
       std::vector<std::tuple<typename Graph::vertex_id_type, typename Graph::vertex_id_type>>
         incoming_packet, // TODO move semantics?
-      hpx::partitioned_vector<typename Real> page_rank,
+      hpx::partitioned_vector<Real> page_rank,
       hpx::partitioned_vector<typename Graph::vertex_id_type> degrees) {
 
       remote_results_type<Graph, Real> results;
@@ -72,11 +72,11 @@ namespace nw::graph {
         : hpx::parallel::detail::algorithm<page_rank_0, Real>("page_rank_0") {}
 
 
-      template <typename ExPolicy, typename Graph, typename Real>
+      template <typename ExPolicy, typename Graph>
       static Real sequential(ExPolicy&& policy, Graph G, const size_t first_index,
                                const size_t last_index,
-                               hpx::partitioned_vector<typename Real> page_rank,
-                               hpx::partitioned_vector<typename Real> accumulated_contributions,
+                               hpx::partitioned_vector<Real> page_rank,
+                               hpx::partitioned_vector<Real> accumulated_contributions,
                                hpx::partitioned_vector<typename Graph::vertex_id_type> degrees,
                                Real base_score, Real damping_factor) {
 

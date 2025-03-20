@@ -43,22 +43,6 @@
 namespace nw::graph {
 namespace bench {
 
-template <directedness Directedness, class... Attributes>
-edge_list<Directedness, Attributes...> load_binary_graph(std::string file) {
-
-  std::filesystem::path p(file), ext(".bmtk");
-  p.replace_extension(ext);
-  if (exists(p)) {
-    edge_list<Directedness, Attributes...> el;
-    el.deserialize(p.string());
-    return el;
-  }
-  
-  auto el = load_graph<Directedness, Attributes...>(file);
-  el.serialize(p.string());
-  return el;
-}
-
 auto set_n_threads(long n) {
 
 #if NWGRAPH_HAVE_TBB
@@ -136,6 +120,23 @@ edge_list<Directedness, Attributes...> load_graph(std::string file) {
     std::cerr << "Did not recognize graph input file " << file << "\n";
     exit(1);
   }
+}
+
+template <directedness Directedness, class... Attributes>
+edge_list<Directedness, Attributes...> load_binary_graph(std::string file) {
+
+  nw::util::life_timer _(__func__);
+  std::filesystem::path p(file), ext(".bmtk");
+  p.replace_extension(ext);
+  if (exists(p)) {
+    edge_list<Directedness, Attributes...> el;
+    el.deserialize(p.string());
+    return el;
+  }
+  
+  auto el = load_graph<Directedness, Attributes...>(file);
+  el.serialize(p.string());
+  return el;
 }
 
 template <int Adj, class ExecutionPolicy = std::execution::parallel_unsequenced_policy, directedness Directedness, class... Attributes>

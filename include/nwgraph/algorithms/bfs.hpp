@@ -28,13 +28,6 @@
 #include <queue>
 #include <ranges>
 
-#if NWGRAPH_HAVE_TBB
-#include <tbb/parallel_for_each.h>
-#else
-#include <hpx/execution.hpp>
-#include <hpx/algorithm.hpp>
-#endif
-
 #if defined(_MSC_VER)
 #include <concurrent_vector.h>
 #include <concurrent_queue.h>
@@ -44,7 +37,8 @@ namespace nw::graph::util {
   template<typename T, typename Alloc = ::std::allocator<T>>
   using concurrent_queue = Concurrency::concurrent_queue<T, Alloc>;
 }
-#else
+#elif NWGRAPH_HAVE_TBB
+#include <tbb/parallel_for_each.h>
 #include <tbb/concurrent_vector.h>
 #include <tbb/concurrent_queue.h>
 namespace nw::graph::util {
@@ -53,6 +47,9 @@ namespace nw::graph::util {
   template<typename T, typename Alloc = ::std::allocator<T>>
   using concurrent_queue = tbb::concurrent_queue<T, Alloc>;
 }
+#elif NWGRAPH_HAVE_HPX
+#include <hpx/execution.hpp>
+#include <hpx/algorithm.hpp>
 #endif
 
 /**
@@ -162,6 +159,8 @@ auto bfs(const Graph& graph, vertex_id_t<Graph> root) {
   }
   return parents;
 }
+
+#if NWGRAPH_HAVE_TBB | defined(_MSC_VER)
 
 /**
  * @brief Parallel Breadth-First Search.
@@ -371,6 +370,7 @@ template <adjacency_list_graph OutGraph, adjacency_list_graph InGraph>
 
   return parents;
 }
+#endif // NWGRAPH_HAVE_TBB | defined(_MSC_VER)
 
 }    // namespace graph
 }    // namespace nw

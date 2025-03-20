@@ -108,8 +108,8 @@ int hpx_main(int argc, char* argv[]) {
     //auto degrees = build_degrees(graph);
     std::vector<vertex_id_type> degrees(graph.size());
 
-    auto graph_size = graph.size();
-    for (auto i = 0; i < graph_size; ++i) {
+    size_t graph_size = graph.size();
+    for (size_t i = 0; i < graph_size; ++i) {
       auto neig_rng = graph[i];
       for (auto&& [n0] : neig_rng) {
         ++degrees[n0];
@@ -160,7 +160,7 @@ int hpx_main(int argc, char* argv[]) {
 
         if (verify) {
           std::cout << "Verifying..." << std::endl; 
-          auto aos_a = load_graph<nw::graph::directedness::directed>(file);
+          auto aos_a = load_binary_graph<nw::graph::directedness::directed>(file);
           bool sort_adj = true;
           auto graph = build_adjacency<0>(aos_a, sort_adj);
 
