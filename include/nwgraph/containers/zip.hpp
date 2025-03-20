@@ -104,11 +104,11 @@ struct zipped : std::tuple<Ranges&...> {
     bool operator==(const soa_iterator&) const  = default;
     auto operator<=>(const soa_iterator&) const = default;
 
-    soa_iterator operator++(int) {
-      return soa_iterator(i_++, soa_);
+    soa_iterator operator++(int) { 
+        return soa_iterator(soa_, i_++);
     }
-    soa_iterator operator--(int) {
-      return soa_iterator(i_--, soa_);
+    soa_iterator operator--(int) { 
+        return soa_iterator(soa_, i_--);
     }
 
     soa_iterator& operator++() {

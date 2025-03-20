@@ -42,12 +42,11 @@ static constexpr const char USAGE[] =
 
 #include "nwgraph/partitioned_adjacency.hpp"
 #include "nwgraph/algorithms/partitioned_page_rank_0.hpp"
-//#include "nwgraph/algorithms/page_rank.hpp"
 #include "nwgraph/experimental/algorithms/page_rank.hpp"
 
 
 #include <hpx/include/partitioned_vector.hpp>
-#include <nwgraph/util/partitioned_serialize.hpp>
+#include <nwgraph/partitioned_build.hpp>
 
 using unsigned_int = unsigned int;
 HPX_REGISTER_PARTITIONED_VECTOR(unsigned_int)
@@ -91,12 +90,18 @@ int hpx_main(int argc, char* argv[]) {
 
   for (auto&& file : files) {
 
-    if (!segment_files_exist(file, num_partitions)) {
-      std::cout << "segment files do not exist, creating them\n";
-      serialize_adjacency_graph_segments(file, num_partitions);
-    }
+    auto el_a = load_binary_graph<nw::graph::directedness::directed>(file);
 
-    auto graph = load_partitioned_adjacency(file, num_partitions);
+    auto loc_graph = build_adjacency<1>(el_a);
+
+    auto cvert_sizes = partitioned_vertex_sizes(num_partitions, num_vertices(el_a));
+    auto cedge_sizes = partitioned_edge_sizes(loc_graph, cvert_sizes);
+
+    // free non-needed memory
+    el_a = edge_list<nw::graph::directedness::directed>{};
+
+    auto graph = distribute_compressed<partitioned_adjacency<1>>(loc_graph, std::move(cvert_sizes),
+                                                                 std::move(cedge_sizes));
 
     using vertex_id_type = typename decltype(graph)::vertex_id_type;
 

@@ -134,6 +134,55 @@ namespace nw::graph {
       indices_.register_as(hpx::launch::sync, std::move(name));
     }
 
+    // Copies data from local_soa
+    template <typename Vector>
+    partitioned_indexed_struct_of_arrays(
+      size_t N, size_t N1, size_t M, Vector&& index_sizes, Vector&& to_be_index_sizes,
+      indexed_struct_of_arrays<index_t, Attributes...>& local_isoa,
+      std::string name, std::vector<hpx::id_type> const& localities = hpx::find_all_localities())
+      : N_(N)
+      , indices_(N1,
+                 hpx::explicit_container_layout(
+                   increment_last_partition(std::forward<Vector>(index_sizes)), localities))
+      , to_be_indexed_(M, std::forward<Vector>(to_be_index_sizes), name, localities) {
+
+      indices_.register_as(hpx::launch::sync, std::move(name));
+
+      if (local_isoa.size() != N || local_isoa.get_to_be_indexed().size() != M) {
+        throw std::runtime_error("partitioned_indexed_struct_of_arrays: local_isoa size mismatch");
+      }
+
+      auto do_copy = [](auto& local_src, auto& dest)
+      {
+        auto const sizes = dest.get_partition_sizes();
+        auto const dest_partitions = sizes.size();
+        std::vector<std::size_t> const empty;
+        size_t offset = 0;
+        for (std::size_t i = 0; i != dest_partitions; ++i) {
+
+          auto size = sizes[i];
+
+          using vec_t = std::decay_t<decltype(local_src)>;
+          vec_t part_data(local_src.begin() + offset, local_src.begin() + offset + size);
+
+          dest.set_values(hpx::launch::sync, i, empty, HPX_MOVE(part_data));
+
+          offset += size;
+        }
+      };
+
+      auto copy_helper = [&do_copy]<std::size_t... I>(std::index_sequence<I...>, auto& local_src,
+                                                      auto& dest)
+      {
+        (do_copy(std::get<I>(local_src), std::get<I>(dest)),
+         ...);
+      };
+
+     do_copy(local_isoa.indices_, indices_);
+     using pack = std::make_index_sequence<sizeof...(Attributes)>; 
+     copy_helper(pack{}, local_isoa.to_be_indexed_, to_be_indexed_);
+    }
+
     // shallow copy constructor, shallow-copies partitioned vectors
     partitioned_indexed_struct_of_arrays(partitioned_indexed_struct_of_arrays const& rhs,
                                          bool make_unmanaged)

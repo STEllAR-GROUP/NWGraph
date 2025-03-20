@@ -50,6 +50,9 @@ static constexpr char USAGE[] =
 #include "nwgraph/algorithms/bfs.hpp"
 #include "nwgraph/algorithms/partitioned_bfs_1.hpp"
 #include "nwgraph/partitioned_adjacency.hpp"
+#include <nwgraph/partitioned_build.hpp>
+
+#include <hpx/include/partitioned_vector.hpp>
 
 #include <filesystem>
 
@@ -57,7 +60,6 @@ static constexpr char USAGE[] =
 #include "Log.hpp"
 #include "common.hpp"
 
-#include <hpx/include/partitioned_vector.hpp>
 
 using unsigned_int = unsigned int;
 HPX_REGISTER_PARTITIONED_VECTOR(unsigned_int)
@@ -65,90 +67,6 @@ HPX_REGISTER_PARTITIONED_VECTOR(unsigned_int)
 using namespace nw::graph::bench;
 using namespace nw::graph;
 using namespace nw::util;
-
-template <directedness Directedness, class... Attributes>
-edge_list<Directedness, Attributes...> load_binary_graph(std::string file) {
-
-  std::filesystem::path p(file), ext(".bmtk");
-  p.replace_extension(ext);
-  if (exists(p)) {
-    edge_list<Directedness, Attributes...> el;
-    el.deserialize(p.string());
-    return el;
-  }
-
-  auto el = load_graph<Directedness, Attributes...>(file);
-  el.serialize(p.string());
-  return el;
-}
-
-template <adjacency_list_graph GraphT, class Vector>
-auto edge_sizes(GraphT const& A, Vector const& vert_sizes) {
-
-  Vector cedge_sizes;
-  cedge_sizes.reserve(vert_sizes.size());
-
-  auto begin = A.begin();
-  auto prev_idx = begin.index();
-  for (auto size : vert_sizes) {
-    begin += size;
-    cedge_sizes.push_back(begin.index() - prev_idx);
-    prev_idx = begin.index();
-  }
-
-  return cedge_sizes;
-}
-
-auto partition_sizes(size_t num_partitions, size_t all_vertices) {
-
-  std::vector<size_t> vert_sizes;
-  vert_sizes.reserve(num_partitions);
-
-  size_t part_size = (all_vertices + num_partitions - 1) / num_partitions;
-  for (size_t part = 0, num_vertices = 0; part != num_partitions;
-       ++part, num_vertices += part_size) {
-
-    assert(all_vertices >= num_vertices);
-    size_t this_part_size =
-      (num_vertices + part_size > all_vertices ? all_vertices - num_vertices : part_size);
-
-    vert_sizes.push_back(this_part_size);
-  }
-
-  return vert_sizes;
-}
-
-template <int Adj, directedness Directedness, typename... Attributes, class Vector>
-auto build_partitioned_adjacency(edge_list<Directedness, Attributes...>& g,
-                                 adjacency<Adj, Attributes...> const& A, Vector&& vert_sizes,
-                                 Vector&& edge_sizes) {
-
-  partitioned_adjacency<Adj, Attributes...> B(g, std::forward<Vector>(vert_sizes),
-                                              std::forward<Vector>(edge_sizes), "local_pg",
-                                              std::vector({hpx::find_here()}));
-
-  std::copy(A.indices_.begin(), A.indices_.end(), B.indices_.begin());
-  std::copy(A.to_be_indexed_.begin(), A.to_be_indexed_.end(), B.to_be_indexed_.begin());
-  return B;
-}
-
-template <adjacency_list_graph adjacency_t>
-void partitioned_copy(adjacency_t const& src, adjacency_t& dest) {
-
-  dest.get_indices().copy_data_from(src.get_indices());
-  dest.get_to_be_indexed().copy_data_from(src.get_to_be_indexed());
-}
-
-
-template <adjacency_list_graph Graph, class Vector>
-auto distribute_compressed(size_t num_vertices, size_t num_edges, Graph& A, Vector&& vert_sizes,
-                           Vector&& edge_sizes) {
-  life_timer _(__func__);
-  Graph B(num_vertices + 1, num_vertices + 1, num_edges, std::forward<Vector>(vert_sizes),
-          std::forward<Vector>(edge_sizes), "pg", hpx::find_all_localities());
-  partitioned_copy(A, B);
-  return B;
-}
 
 int hpx_main(int argc, char* argv[]) {
   std::vector strings = std::vector<std::string>(argv + 1, argv + argc);
@@ -181,17 +99,16 @@ int hpx_main(int argc, char* argv[]) {
   auto loc_graph = build_adjacency<1>(aos_a);
   auto gx = build_adjacency<0>(aos_a);
 
-  auto cvert_sizes = partition_sizes(num_partitions, num_vertices(aos_a));
-  auto cedge_sizes = edge_sizes(loc_graph, cvert_sizes);
+  auto cvert_sizes = partitioned_vertex_sizes(num_partitions, num_vertices(aos_a));
+  auto cedge_sizes = partitioned_edge_sizes(loc_graph, cvert_sizes);
 
-  auto loc_part_graph = build_partitioned_adjacency(aos_a, loc_graph, cvert_sizes, cedge_sizes);
+  // free non-needed memory
+  aos_a = edge_list<nw::graph::directedness::directed>{};
 
-  auto graph = distribute_compressed(num_vertices(aos_a), num_edges(aos_a), loc_part_graph,
-                                     std::move(cvert_sizes), std::move(cedge_sizes));
+  auto graph = distribute_compressed<partitioned_adjacency<1>>(loc_graph, std::move(cvert_sizes), std::move(cedge_sizes));
 
   // free non-needed memory
   loc_graph = adjacency<1>{};
-  loc_part_graph = partitioned_adjacency<1>{};
 
   if (verbose) {
     graph.stream_stats();

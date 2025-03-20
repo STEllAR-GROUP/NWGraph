@@ -223,11 +223,11 @@ namespace nw::graph {
 
     for (size_t iter = 0; iter < max_iters; ++iter) {
 
-    std::cout << "----- Iteration " << iter << " ----- " << std::endl;
+    //std::cout << "----- Iteration " << iter << " ----- " << std::endl;
 
-    for (auto i = 0; i < G.size(); ++i) {
-      std::cout << "Node " << i << " : " << page_rank[i] << std::endl;
-    }
+    //for (auto i = 0; i < G.size(); ++i) {
+    //  std::cout << "Node " << i << " : " << page_rank[i] << std::endl;
+    //}
 
 
      auto errors = partitioned_algorithm<detail::page_rank_0<Real>>(
