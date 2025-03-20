@@ -58,6 +58,26 @@ using namespace nw::graph::bench;
 using namespace nw::graph;
 using namespace nw::util;
 
+template <typename T>
+void copy_to(std::vector<T>& local_src, hpx::partitioned_vector<T>& dest)
+{
+  auto const sizes = dest.get_partition_sizes();
+  auto const dest_partitions = sizes.size();
+  std::vector<std::size_t> const empty;
+  size_t offset = 0;
+  for (std::size_t i = 0; i != dest_partitions; ++i) {
+
+    auto size = sizes[i];
+
+    using vec_t = std::decay_t<decltype(local_src)>;
+    vec_t part_data(local_src.begin() + offset, local_src.begin() + offset + size);
+
+    dest.set_values(hpx::launch::sync, i, empty, HPX_MOVE(part_data));
+
+    offset += size;
+  }
+}
+
 template <typename Vector>
 void print_n_ranks(const Vector& rankings, size_t n) {
   auto perm = proxysort<size_t>(rankings, std::greater<float>());
@@ -86,52 +106,41 @@ int hpx_main(int argc, char* argv[]) {
   std::vector ids = parse_ids(args["--version"].asStringList());
   std::vector threads = parse_n_threads(args["THREADS"].asStringList());
 
-  Times times;
+  Times<float> times;
 
   for (auto&& file : files) {
 
     auto el_a = load_binary_graph<nw::graph::directedness::directed>(file);
 
-    auto loc_graph = build_adjacency<1>(el_a);
+    auto loc_graph = build_adjacency<0>(el_a);
+    auto loc_degrees = degrees(loc_graph);
 
     auto cvert_sizes = partitioned_vertex_sizes(num_partitions, num_vertices(el_a));
     auto cedge_sizes = partitioned_edge_sizes(loc_graph, cvert_sizes);
 
     // free non-needed memory
-    el_a = edge_list<nw::graph::directedness::directed>{};
+    if (!verify)
+        el_a = edge_list<nw::graph::directedness::directed>{};
 
-    auto graph = distribute_compressed<partitioned_adjacency<1>>(loc_graph, std::move(cvert_sizes),
+    auto graph = distribute_compressed<partitioned_adjacency<0>>(loc_graph, std::move(cvert_sizes),
                                                                  std::move(cedge_sizes));
 
     using vertex_id_type = typename decltype(graph)::vertex_id_type;
 
-    //auto degrees = build_degrees(graph);
-    std::vector<vertex_id_type> degrees(graph.size());
-
-    size_t graph_size = graph.size();
-    for (size_t i = 0; i < graph_size; ++i) {
-      auto neig_rng = graph[i];
-      for (auto&& [n0] : neig_rng) {
-        ++degrees[n0];
-      }
-    }
-
-
-    using degree_type = typename decltype(degrees)::value_type;
-
     auto sizes = graph.indices_.get_partition_sizes();
-
+    
+    using degree_type = typename decltype(loc_degrees)::value_type;
     hpx::partitioned_vector<degree_type> p_degrees(
-      degrees.size(), 0.0,
+      loc_degrees.size(), 0.0,
       hpx::explicit_container_layout(sizes, graph.indices_.get_partition_localities()));
     p_degrees.register_as("p_degrees");
 
-
-    //hpx::copy(degrees.begin(), degrees.end(), p_degrees.begin());
-    //degrees.register_as("p_degrees");
-    for (size_t i = 0; i < graph.size(); ++i) {
-      p_degrees[i] = degrees[i];
+    {
+      nw::util::life_timer _("distribute degrees");
+      copy_to(loc_degrees, p_degrees);
     }
+    
+  
 
     hpx::partitioned_vector<float> p_rankings(
       graph.indices_.size(), 0.0,
@@ -155,22 +164,18 @@ int hpx_main(int argc, char* argv[]) {
                 std::cerr << "Unknown version id " << id << std::endl;
                 break;
               }
-            });
+            }, tolerance);
         }
 
         if (verify) {
           std::cout << "Verifying..." << std::endl; 
-          auto aos_a = load_binary_graph<nw::graph::directedness::directed>(file);
-          bool sort_adj = true;
-          auto graph = build_adjacency<0>(aos_a, sort_adj);
+          nw::util::life_timer _("verification");
 
-          auto degrees = build_degrees(graph);
+          std::vector<float> local_rankings(loc_graph.size());
 
-          std::vector<float> local_rankings(graph.size());
+          page_rank_v1(loc_graph, loc_degrees, local_rankings, 0.85f, tolerance, max_iters);
 
-          page_rank_v1(graph, degrees, local_rankings, 0.85f, tolerance, max_iters);
-
-          float err_threshold = 1e-4; // arbitrary
+          float err_threshold = 1e-2; // arbitrary
           float max_err = 0;
           for (size_t i = 0; i < graph.size(); ++i) {
             max_err = std::max(max_err, std::abs(p_rankings[i] - local_rankings[i]));

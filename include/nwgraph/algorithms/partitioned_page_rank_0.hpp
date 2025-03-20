@@ -42,8 +42,8 @@ namespace nw::graph {
 
     template <typename Graph, typename Real>
     static remote_results_type<Graph, Real> do_page_rank_packet_0(
-      std::vector<std::tuple<typename Graph::vertex_id_type, typename Graph::vertex_id_type>>
-        incoming_packet, // TODO move semantics?
+      std::vector<std::tuple<typename Graph::vertex_id_type, typename Graph::vertex_id_type>>&&
+        incoming_packet,
       hpx::partitioned_vector<Real> page_rank,
       hpx::partitioned_vector<typename Graph::vertex_id_type> degrees) {
 
@@ -156,7 +156,7 @@ namespace nw::graph {
               remote_result_t incoming_packet = f.get();
               for (auto&& [v, incoming_val] : incoming_packet) {
                 auto acc_iter = accumulated_contributions.get_local_iterator(v).local();
-                *acc_iter += incoming_val; // TODO make atomic
+                std::atomic_ref(*acc_iter) += incoming_val;
               }
             });
 
@@ -223,7 +223,7 @@ namespace nw::graph {
 
     for (size_t iter = 0; iter < max_iters; ++iter) {
 
-    //std::cout << "----- Iteration " << iter << " ----- " << std::endl;
+    std::cout << "----- Iteration " << iter << " ----- " << std::endl;
 
     //for (auto i = 0; i < G.size(); ++i) {
     //  std::cout << "Node " << i << " : " << page_rank[i] << std::endl;

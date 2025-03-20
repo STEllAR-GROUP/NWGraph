@@ -78,6 +78,7 @@ auto partitioned_vertex_sizes(size_t num_partitions, size_t all_vertices) {
 
   template <adjacency_list_graph Graph, class Vector, int idx>
   auto distribute_compressed(adjacency<idx>& A, Vector&& vert_sizes, Vector&& edge_sizes) {
+    nw::util::life_timer _(__func__);
     auto num_vertices = A.num_vertices()[0];
     auto num_edges = A.num_edges();
     Graph B(num_vertices, num_edges, std::forward<Vector>(vert_sizes),

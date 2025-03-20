@@ -44,10 +44,10 @@ namespace bench {
 
 struct Log {
   std::string   uuid_;
-  char          host_[20];
+  char          host_[50];
   std::string   date_;
-  std::string   git_branch_;
-  std::string   git_version_;
+  std::string   git_branch_ = "unknown";
+  std::string   git_version_ = "unknown";
   std::size_t   uuid_size_ = 24;
   std::size_t   cxx_size_;
   std::size_t   cxx_id_size_;
