@@ -17,7 +17,7 @@ static constexpr const char USAGE[] =
   R"(pr.exe: BGL17 page rank benchmark driver.
   Usage:
       pr.exe (-h | --help)
-      pr.exe [--version ID...] -f FILE... [-i NUM] [-t NUM] [-n NUM] [-dvV] [--log FILE] [--log-header] [--partitions PARTS] [THREADS]...
+      pr.exe [--version ID...] -f FILE... [-i NUM] [-t NUM] [-n NUM] [-dvV] [--log FILE] [--log-header] [--partitions PARTS] [--batchsize SIZE] [THREADS]...
 
   Options:
       -h, --help                show this screen
@@ -32,6 +32,7 @@ static constexpr const char USAGE[] =
       -v, --verify              verify results
       -V, --verbose             run in verbose mode
       -p, --partitions PARTS    number of graph partitions to create [default: 1]
+      -b, --batchsize SIZE    number asynchronous operations to batch [default: 10000]
 )";
 
 #include <hpx/hpx_init.hpp>
@@ -100,6 +101,7 @@ int hpx_main(int argc, char* argv[]) {
   float tolerance = std::stof(args["-t"].asString());
   long num_partitions = args["--partitions"].asLong() ? args["--partitions"].asLong()
                                                       : hpx::get_num_localities(hpx::launch::sync);
+  long batchsize = args["--batchsize"].asLong() ? args["--batchsize"].asLong() : 10000;
 
   std::cout << "Running on " << num_partitions << " partitions\n";
 
@@ -107,7 +109,7 @@ int hpx_main(int argc, char* argv[]) {
   std::vector ids = parse_ids(args["--version"].asStringList());
   std::vector threads = parse_n_threads(args["THREADS"].asStringList());
 
-  Times times;
+  Times<float> times;
 
   for (auto&& file : files) {
 
@@ -148,9 +150,6 @@ int hpx_main(int argc, char* argv[]) {
       hpx::explicit_container_layout(sizes, graph.indices_.get_partition_localities()));
     p_rankings.register_as("p_rankings");
 
-    size_t batchsize = 100;
-
-
     for (auto thread : threads) {
       auto _ = set_n_threads(thread);
       for (auto id : ids) {
@@ -172,7 +171,7 @@ int hpx_main(int argc, char* argv[]) {
                 std::cerr << "Unknown version id " << id << std::endl;
                 break;
               }
-            });
+            }, tolerance);
         }
 
         if (verify) {
