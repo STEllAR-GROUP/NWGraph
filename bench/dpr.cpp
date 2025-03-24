@@ -42,6 +42,7 @@ static constexpr const char USAGE[] =
 
 #include "nwgraph/partitioned_adjacency.hpp"
 #include "nwgraph/algorithms/partitioned_page_rank_0.hpp"
+#include "nwgraph/algorithms/partitioned_page_rank_1.hpp"
 #include "nwgraph/experimental/algorithms/page_rank.hpp"
 
 
@@ -147,6 +148,9 @@ int hpx_main(int argc, char* argv[]) {
       hpx::explicit_container_layout(sizes, graph.indices_.get_partition_localities()));
     p_rankings.register_as("p_rankings");
 
+    size_t batchsize = 100;
+
+
     for (auto thread : threads) {
       auto _ = set_n_threads(thread);
       for (auto id : ids) {
@@ -158,6 +162,10 @@ int hpx_main(int argc, char* argv[]) {
               switch (id) {
               case 0:
                 partitioned_page_rank_0(graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters);
+                break;
+              case 1:
+                partitioned_page_rank_1(graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters,
+                                        batchsize);
                 break;
 
               default:
