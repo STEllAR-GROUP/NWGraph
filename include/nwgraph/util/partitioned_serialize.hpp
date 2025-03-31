@@ -1,247 +1,304 @@
 #include <filesystem>
+#include <fstream>
+#include <iostream>
 
 #include "nwgraph/adjacency.hpp"
 #include "nwgraph/edge_list.hpp"
 #include "nwgraph/graph_base.hpp"
 #include "nwgraph/io/mmio.hpp"
 #include "nwgraph/partitioned_adjacency.hpp"
+#include "nwgraph/algorithms/partitioned_algorithm.hpp"
 
-//using unsigned_int = unsigned int;
-//HPX_REGISTER_PARTITIONED_VECTOR(unsigned_int)
+#include <hpx/async_combinators/wait_all.hpp>
+#include <hpx/executors/execution_policy.hpp>
+#include <hpx/include/partitioned_vector_predef.hpp>
+#include <hpx/parallel/segmented_algorithms/detail/dispatch.hpp>
+
 
 namespace nw::graph {
 
-  std::tuple<size_t, size_t> get_part_range(size_t nNonzeros, size_t n_partitions, size_t i) {
-    size_t segment_size = (nNonzeros + n_partitions - 1) / n_partitions;
-    size_t begin = i * segment_size;
-    size_t end = std::min((i + 1) * segment_size, nNonzeros);
-    return {begin, end};
-  }
+namespace detail {
 
-  std::string get_part_filename(std::string in_file, size_t n_partitions, size_t i) {
-    return in_file + "." + std::to_string(i) + "." + std::to_string(n_partitions) + ".bmtk";
-  }
+    auto partitioned_vertex_sizes(size_t num_partitions, size_t all_vertices) {
 
+      std::vector<size_t> vert_sizes;
+      vert_sizes.reserve(num_partitions);
 
-  std::string get_index_filename(std::string in_file, size_t n_partitions) {
-    return in_file + ".index." + std::to_string(n_partitions) + ".bmtk";
-  }
+      size_t part_size = (all_vertices + num_partitions - 1) / num_partitions;
+      for (size_t part = 0, num_vertices = 0; part != num_partitions;
+           ++part, num_vertices += part_size) {
 
+        assert(all_vertices >= num_vertices);
+        size_t this_part_size =
+          (num_vertices + part_size > all_vertices ? all_vertices - num_vertices : part_size);
 
-  bool segment_files_exist(std::string in_file, size_t n_partitions) {
-    for (size_t i = 0; i < n_partitions; ++i) {
-      std::string out_file = get_part_filename(in_file, n_partitions, i);
-      if (!std::filesystem::exists(out_file)) {
-        return false;
+        vert_sizes.push_back(this_part_size);
       }
-    }
-    std::string index_file = get_index_filename(in_file, n_partitions);
-    if (!std::filesystem::exists(index_file)) {
-      return false;
-    }
-    return true;
-  }
 
-
-  // Serialize vector
-  template <typename T>
-  std::ostream& operator<<(std::ostream& out, const std::vector<T>& v) {
-    out << v.size() << "\n";
-    for (const auto& e : v) {
-      out << e << "\n";
-    }
-    return out;
-  }
-
-
-  // Deserialize vector
-  template <typename T>
-  std::istream& operator>>(std::istream& in, std::vector<T>& v) {
-    size_t size;
-    in >> size;
-    v.resize(size);
-    for (auto& e : v) {
-      in >> e;
-    }
-    return in;
-  }
-
-
-  auto compress_part(edge_list<directedness::undirected>& A, size_t n_indices,
-                     size_t n_to_be_indexed, size_t prev_index_end, bool is_last) {
-   
-    std::vector<default_index_t> indices(n_indices + 1, 0);
-    std::vector<default_index_t> to_be_indexed(n_to_be_indexed);
-
-    size_t idx_offset = std::get<0>(A[0]);
-    for (size_t i = 0; i < A.size(); i++) {
-      indices[std::get<0>(A[i]) - idx_offset]++;
-      to_be_indexed[i] = std::get<1>(A[i]);
+      return vert_sizes;
     }
 
-    std::exclusive_scan(indices.begin(), indices.end(), indices.begin(), prev_index_end);
+    auto compress_partial(edge_list<directedness::undirected>& A, size_t n_indices,
+                          size_t n_to_be_indexed, size_t idx_offset) {
 
-    // Last element only needed for the last segment
-    if (!is_last) {
-      indices.pop_back();
+      std::vector<default_index_t> indices(n_indices, 0);
+      std::vector<default_index_t> to_be_indexed(n_to_be_indexed);
+
+      size_t idx_start = std::get<0>(A[0]);
+      for (size_t i = 0; i < A.size(); i++) {
+        indices[std::get<0>(A[i]) - idx_start]++;
+        to_be_indexed[i] = std::get<1>(A[i]);
+      }
+
+      std::exclusive_scan(indices.begin(), indices.end(), indices.begin(), idx_offset);
+
+      return std::make_tuple(std::move(indices), std::move(to_be_indexed));
+    };
+
+    std::string get_adj_filename(std::string mtx_file) {
+      return mtx_file.substr(0, mtx_file.find_last_of('.')) + ".adj";
     }
 
-    return std::make_tuple(std::move(indices), std::move(to_be_indexed));
-  };
+  } // namespace detail
 
-
-  void serialize_adjacency_graph_segments(std::string mtx_file, size_t n_partitions) {
+  void serialize_adj(std::string mtx_file, size_t max_part_size) {
 
     // Get matrix size
     std::ifstream in_stream(mtx_file);
     auto [n_vertices, _, n_edges] = read_mm_metadata(in_stream);
+    size_t n_parts = (n_vertices + max_part_size - 1) / max_part_size;
+    auto part_sizes = detail::partitioned_vertex_sizes(n_parts, n_vertices);
 
-    // Keep track of the number of vertices and edges in each segment
-    std::vector<size_t> vertex_counts;
-    std::vector<size_t> edge_counts;
+    std::string file_name = detail::get_adj_filename(mtx_file);
 
-    size_t prev_index_end = 0;
+    char magic[] = "NWGRAPH ADJACENCY BINARY FILE";
 
-    for (size_t i = 0; i < n_partitions; ++i) {
-      auto [index_begin, index_end] = get_part_range(n_vertices, n_partitions, i);
+    size_t header_size = sizeof(magic) + sizeof(n_vertices) + sizeof(n_edges);
+    size_t indices_size = sizeof(unsigned int) * (n_vertices + 1); // for adjacency list
+    size_t to_be_indexed_size = sizeof(unsigned int) * (n_edges); // for to_be_indexed
+    size_t total_size = header_size + indices_size + to_be_indexed_size;
+    // Create file
+    {
+      std::ofstream f(file_name /*, std::ios::binary*/);
+    }
+    std::filesystem::resize_file(file_name,
+                                 total_size); // Resize file to accommodate header and data
 
-      in_stream = std::ifstream(mtx_file);
-
-      // Reads the whole file, but only keeps edges whose source index is within the range
-      auto pred = [index_begin, index_end](auto&& d0, auto&& d1, auto&& v)
-      { return d0 >= index_begin && d0 < index_end; };
-
-      auto edgelist = read_mm<decltype(pred), directedness::undirected>(in_stream, pred);
-
-      size_t n_indices = index_end - index_begin;
-      size_t n_to_be_indexed = edgelist.size();
-
-      vertex_counts.push_back(n_indices);
-      edge_counts.push_back(n_to_be_indexed);
-
-      // compress the segment
-      sort_by<0>(edgelist);
-      bool is_last = i == n_partitions - 1;
-      auto [indices, to_be_indexed] =
-        compress_part(edgelist, n_indices, n_to_be_indexed, prev_index_end, is_last);
-
-      prev_index_end += n_to_be_indexed;
-
-      // Serialize the compressed segment
-      std::string out_file = get_part_filename(mtx_file, n_partitions, i);
-
-      std::ofstream out_stream(out_file, std::ofstream::binary);
-      out_stream << mtx_file << "\n";
-      out_stream << index_begin << "\n";
-      out_stream << index_end << "\n";
-      out_stream << n_indices << "\n";
-      out_stream << n_to_be_indexed << "\n";
-      out_stream << i << "\n";
-      out_stream << n_partitions << "\n";
-      out_stream << indices;
-      out_stream << to_be_indexed;
+    // Write header
+    {
+      std::ofstream f(file_name, std::ios::binary);
+      f.write(magic, sizeof(magic));
+      f.write(reinterpret_cast<const char*>(&n_vertices), sizeof(n_vertices));
+      f.write(reinterpret_cast<const char*>(&n_edges), sizeof(n_edges));
+      assert(f.tellp() == header_size);
     }
 
-    // Write the index file
-    // Index contains the number of vertices and edges in each segment, needed
-    // to initialize the partitioned adjacency graph
-    std::string index_filename = get_index_filename(mtx_file, n_partitions);
-    std::ofstream index_stream(index_filename);
-    index_stream << mtx_file << "\n";
-    index_stream << n_vertices << "\n";
-    index_stream << n_edges << "\n";
-    index_stream << n_partitions << "\n";
-    index_stream << vertex_counts << edge_counts;
+
+    // Open file twice for writing indices and to_be_indexed simultaneously
+    auto open_mode = std::ios::binary | std::ios::in | std::ios::out | std::ios::ate;
+    std::ofstream f_idx(file_name, open_mode);
+    f_idx.seekp(header_size); // Move to the end of the header
+    std::ofstream f_to_be_idx(file_name, open_mode);
+    f_to_be_idx.seekp(header_size + indices_size); // Move to the end of the indices
+
+    // Keep count for sanity
+    size_t total_written_indices = 0;
+    size_t total_written_to_be_indexed = 0;
+    size_t idx_start = 0;
+    for (size_t part_size : part_sizes) {
+      size_t idx_end = idx_start + part_size;
+
+      // Reads the whole file, but only keeps edges whose source index is within the range
+      auto pred = [idx_start, idx_end](auto&& d0, auto&& d1, auto&& v)
+      { return d0 >= idx_start && d0 < idx_end; };
+
+      in_stream.seekg(0); // Reset to beggining of the file
+      auto edgelist = read_mm<decltype(pred), directedness::undirected>(in_stream, pred);
+
+      // Create partial adjacency
+      sort_by<0>(edgelist);
+      auto [indices, to_be_indexed] = detail::compress_partial(
+        edgelist, idx_end - idx_start, edgelist.size(), total_written_to_be_indexed);
+
+      auto f_idx_pos = f_idx.tellp();
+
+      // Serialize the indices and to_be_indexed vectors
+      f_idx.write(reinterpret_cast<const char*>(indices.data()),
+                  indices.size() * sizeof(unsigned int));
+      f_idx.flush();
+
+      assert((f_idx.tellp() - f_idx_pos) / sizeof(unsigned int) == indices.size());
+
+      assert(f_idx.tellp() <= header_size + indices_size);
+
+      auto f_to_be_idx_pos = f_to_be_idx.tellp();
+
+      f_to_be_idx.write(reinterpret_cast<const char*>(to_be_indexed.data()),
+                        to_be_indexed.size() * sizeof(unsigned int));
+      f_to_be_idx.flush();
+
+      assert((f_to_be_idx.tellp() - f_to_be_idx_pos) / sizeof(unsigned int) ==
+             to_be_indexed.size());
+
+      assert(f_to_be_idx.tellp() <= total_size);
+
+      total_written_indices += indices.size();
+      total_written_to_be_indexed += to_be_indexed.size();
+      idx_start = idx_end; // Update start index for next partition
+    }
+    assert(total_written_indices == n_vertices);
+    assert(total_written_to_be_indexed == n_edges);
+    // Write final idx, which should point to the end of the last to_be_indexed
+    f_idx.write(reinterpret_cast<const char*>(&n_edges), sizeof(unsigned int));
+    // final checks
+    assert(f_idx.tellp() == header_size + indices_size);
+    assert(f_to_be_idx.tellp() == total_size);
+
+    f_idx.close();
+    f_to_be_idx.close();
+    std::cout << "Adjacency file serialized successfully." << std::endl;
+    std::cout << "File size: " << total_size << " bytes." << std::endl;
   }
 
 
-  auto deserialize_adjacency_graph_segment(std::string mtx_file, size_t n_partitions, size_t idx) {
-    std::string out_file = get_part_filename(mtx_file, n_partitions, idx);
-
-    std::ifstream in_stream(out_file, std::ifstream::binary);
-    std::string origin_file;
-    size_t segment_begin, segment_end, n_indices, n_to_be_indexed, i_segment_idx, i_n_partitions;
-    in_stream >> origin_file >> segment_begin >> segment_end >> n_indices >> n_to_be_indexed >>
-      i_segment_idx >> i_n_partitions;
-
-    if (origin_file != mtx_file) {
-      std::cerr << "Error: origin file mismatch\n";
+  auto deserialize_adj_part(std::string mtx_file, size_t begin_idx, size_t end_idx) {
+    assert(begin_idx <= end_idx);
+    std::string file_name = detail::get_adj_filename(mtx_file);
+    std::ifstream f(file_name, std::ios::binary | std::ios::in);
+    char magic[30];
+    f.read(magic, 30);
+    if (strncmp(magic, "NWGRAPH ADJACENCY BINARY FILE", 30) != 0) {
+      std::cerr << "Error: Invalid file format\n";
       exit(1);
     }
+    size_t n_vertices;
+    size_t n_edges;
 
-    if (idx != i_segment_idx) {
-      std::cerr << "Error: segment index mismatch\n";
-      exit(1);
-    }
+    f.read(reinterpret_cast<char*>(&n_vertices), sizeof(n_vertices));
+    f.read(reinterpret_cast<char*>(&n_edges), sizeof(n_edges));
 
-    if (n_partitions != i_n_partitions) {
-      std::cerr << "Error: segment count mismatch\n";
-      exit(1);
-    }
-    
-    std::vector<default_index_t> indices;
-    std::vector<default_index_t> to_be_indexed;
+    assert(end_idx <= n_vertices);
 
-    in_stream >> indices;
-    in_stream >> to_be_indexed;
+    size_t header_size = sizeof(magic) + sizeof(n_vertices) + sizeof(n_edges);
+    size_t indices_size = sizeof(unsigned int) * (n_vertices + 1); // for adjacency list
+    size_t to_be_indexed_size = sizeof(unsigned int) * (n_edges); // for to_be_indexed
+
+    std::vector<unsigned int> indices(end_idx - begin_idx + 1);
+    f.seekg(header_size + begin_idx * sizeof(unsigned int));
+    f.read(reinterpret_cast<char*>(indices.data()), indices.size() * sizeof(unsigned int));
+
+    size_t begin_to_be_idx = indices.front();
+    size_t end_to_be_idx = indices.back();
+
+    std::vector<unsigned int> to_be_indexed(end_to_be_idx - begin_to_be_idx);
+    f.seekg(header_size + indices_size + begin_to_be_idx * sizeof(unsigned int));
+    f.read(reinterpret_cast<char*>(to_be_indexed.data()),
+           to_be_indexed.size() * sizeof(unsigned int));
 
     return std::make_tuple(std::move(indices), std::move(to_be_indexed));
   }
 
+  std::vector<size_t> read_edge_sizes(std::string file_name, std::vector<size_t> idx_sizes) {
+    std::ifstream f(file_name, std::ios::binary | std::ios::in);
+    char magic[30];
+    f.read(magic, 30);
+    if (strncmp(magic, "NWGRAPH ADJACENCY BINARY FILE", 30) != 0) {
+      std::cerr << "Error: Invalid file format\n";
+      exit(1);
+    }
+    size_t n_vertices;
+    size_t n_edges;
+    f.read(reinterpret_cast<char*>(&n_vertices), sizeof(n_vertices));
+    f.read(reinterpret_cast<char*>(&n_edges), sizeof(n_edges));
+    size_t header_size = sizeof(magic) + sizeof(n_vertices) + sizeof(n_edges);
+    size_t indices_size = sizeof(unsigned int) * (n_vertices + 1); // for adjacency list
+    size_t to_be_indexed_size = sizeof(unsigned int) * (n_edges); // for to_be_indexed
+    f.seekg(header_size + indices_size);
+    std::vector<size_t> edge_sizes;
+    size_t begin_idx = 0;
+    for (auto curr_size : idx_sizes) {
+      size_t end_idx = begin_idx + curr_size;
+      unsigned int begin_to_be_idx;
+      f.seekg(header_size + begin_idx * sizeof(unsigned int));
+      f.read(reinterpret_cast<char*>(&begin_to_be_idx), sizeof(begin_to_be_idx));
+      unsigned int end_to_be_idx;
+      f.seekg(header_size + end_idx * sizeof(unsigned int));
+      f.read(reinterpret_cast<char*>(&end_to_be_idx), sizeof(end_to_be_idx));
+      edge_sizes.push_back(end_to_be_idx - begin_to_be_idx);
+      begin_idx = end_idx;
+    }
+    return edge_sizes;
+  }
 
-  auto construct_partitioned_adjacency_from_index(std::string index_file, size_t n_partitions) {
+  struct read_partitioned_adj_part
+    : hpx::parallel::detail::algorithm<read_partitioned_adj_part, int> {
 
-    // Read sizes from index file
-    std::vector<size_t> vert_sizes(n_partitions);
-    std::vector<size_t> edge_sizes(n_partitions);
+    constexpr read_partitioned_adj_part() noexcept
+      : hpx::parallel::detail::algorithm<read_partitioned_adj_part, int>(
+          "read_partitioned_adj_part") {}
 
-    if (!std::filesystem::exists(index_file)) {
-      std::cerr << "Error: index file (" + index_file + ") does not exist\n ";
+    template <typename ExPolicy>
+    static int sequential(ExPolicy&&, partitioned_adjacency<0> G, size_t first_index, size_t last_index,
+                    std::string file_name) {
+
+      auto [indices, to_be_indexed] = deserialize_adj_part(file_name, first_index, last_index);
+      if (last_index != G.size()) {
+        indices.pop_back();  // Will be included in the next partition.
+      }
+      auto p_indices = G.get_indices().get_local_iterator(first_index).local();
+      auto first_to_be_idx = indices.front();
+      auto p_to_be_indexed =
+        std::get<0>(G.get_to_be_indexed()).get_local_iterator(first_to_be_idx).local();
+
+      std::copy(indices.begin(), indices.end(), p_indices);
+      std::copy(to_be_indexed.begin(), to_be_indexed.end(), p_to_be_indexed);
+      return 0;
+    }
+
+    template <typename ExPolicy>
+    static int parallel(ExPolicy&&, partitioned_adjacency<0> G, size_t first_index,
+                       size_t last_index,
+                 std::string file_name) {
+      return 0;
+    }
+  };
+
+
+
+  //struct read_partitioned_adj_part_action
+  //  : hpx::actions::action<decltype(&read_partitioned_adj_part), &read_partitioned_adj_part,
+  //                         read_partitioned_adj_part_action> {};
+
+
+  auto partitioned_deserialize_adj(std::string mtx_file) {
+    // Get sizes
+    std::string file_name = detail::get_adj_filename(mtx_file);
+    std::ifstream f(file_name, std::ios::binary | std::ios::in);
+    char magic[30];
+    f.read(magic, 30);
+    if (strncmp(magic, "NWGRAPH ADJACENCY BINARY FILE", 30) != 0) {
+      std::cerr << "Error: Invalid file format\n";
       exit(1);
     }
 
-    std::ifstream index_stream(index_file);
-    std::string origin_file;
-    size_t n_vertices, n_edges, i_n_partitions;
-    index_stream >> origin_file >> n_vertices >> n_edges >> i_n_partitions >> vert_sizes >>
-      edge_sizes;
+    size_t n_vertices;
+    size_t n_edges;
 
-    // Construct the partitioned adjacency graph
-    partitioned_adjacency<0> G(n_vertices, n_edges, vert_sizes, edge_sizes, "pg",
+    f.read(reinterpret_cast<char*>(&n_vertices), sizeof(n_vertices));
+    f.read(reinterpret_cast<char*>(&n_edges), sizeof(n_edges));
+
+    // construct partitioned adjacency graph
+    size_t n_localities = hpx::get_num_localities(hpx::launch::sync);
+    auto part_sizes = detail::partitioned_vertex_sizes(n_localities, n_vertices);
+    auto edge_sizes = read_edge_sizes(file_name, part_sizes);
+    partitioned_adjacency<0> G(n_vertices, n_edges, part_sizes, edge_sizes, "pg",
                                hpx::find_all_localities());
 
-    return G;
-  }
-
-  partitioned_adjacency<0> load_partitioned_adjacency(std::string mtx_file, size_t n_partitions) {
-
-    std::string index_file = get_index_filename(mtx_file, n_partitions);
-    auto G = construct_partitioned_adjacency_from_index(index_file, n_partitions);
-
-    auto& p_indices = G.get_indices();
-    auto& p_to_be_indexed = G.get_to_be_indexed();
-
-    // Fill partitioned adjacency graph
-    auto it_indices = p_indices.begin();
-    auto it_to_be_indexed = p_to_be_indexed.begin();
-    for (size_t i = 0; i < n_partitions; i++) {
-
-      std::string filename = get_part_filename(mtx_file, n_partitions, i);
-
-      // Deserialize the segment
-      auto [indices, to_be_indexed] =
-        deserialize_adjacency_graph_segment(mtx_file, n_partitions, i);
-
-      // TODO: Assert that partition sizes match
-
-      std::vector<std::size_t> const empty;
-      p_indices.set_values(hpx::launch::sync, i, empty, HPX_MOVE(indices));
-
-      std::get<0>(p_to_be_indexed).set_values(hpx::launch::sync, i, empty, HPX_MOVE(to_be_indexed));
-
-
-    }
+    partitioned_algorithm<read_partitioned_adj_part>(
+      hpx::execution::seq, G, file_name);
 
     return G;
   }
+
+
 } // namespace nw::graph
