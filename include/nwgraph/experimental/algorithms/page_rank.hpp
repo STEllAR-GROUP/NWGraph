@@ -260,6 +260,8 @@ void page_rank_v4(const Graph& graph, const std::vector<typename Graph::vertex_i
   }
 }
 
+#if NWGRAPH_HAVE_TBB
+
 template <adjacency_list_graph Graph, typename Real = double>
 [[gnu::noinline]] void page_rank_v6(const Graph& graph, const std::vector<typename Graph::vertex_id_type>& degrees,
                                     std::vector<Real>& page_rank, const Real damping_factor = 0.85, const Real threshold = 1.e-4,
@@ -563,6 +565,8 @@ template <adjacency_list_graph Graph, typename Real>
   }
 }
 
+#endif 
+
 template <adjacency_list_graph Graph, typename Real>
 [[gnu::noinline]] void page_rank_v3(const Graph& graph, const std::vector<typename Graph::vertex_id_type>& degrees,
                                     std::vector<Real>& page_rank, Real damping_factor, Real threshold, size_t max_iters) {
@@ -626,6 +630,8 @@ template <adjacency_list_graph Graph, typename Real>
     }
   }
 }
+
+#if NWGRAPH_HAVE_TBB
 
 template <adjacency_list_graph Graph, typename Real>
 [[gnu::noinline]] void page_rank_v13(const Graph& graph, const std::vector<typename Graph::vertex_id_type>& degrees,
@@ -733,6 +739,8 @@ template <adjacency_list_graph Graph, typename Real>
   }
   return max_iters;
 }
+
+#endif
 
 }    // namespace graph
 }    // namespace nw

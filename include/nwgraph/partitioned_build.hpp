@@ -39,6 +39,54 @@
 
 namespace nw::graph {
 
+    
+auto partitioned_vertex_sizes(size_t num_partitions, size_t all_vertices) {
+
+    std::vector<size_t> vert_sizes;
+    vert_sizes.reserve(num_partitions);
+
+    size_t part_size = (all_vertices + num_partitions - 1) / num_partitions;
+    for (size_t part = 0, num_vertices = 0; part != num_partitions;
+         ++part, num_vertices += part_size) {
+
+      assert(all_vertices >= num_vertices);
+      size_t this_part_size =
+        (num_vertices + part_size > all_vertices ? all_vertices - num_vertices : part_size);
+
+      vert_sizes.push_back(this_part_size);
+    }
+
+    return vert_sizes;
+  }
+
+  template <adjacency_list_graph GraphT, class Vector>
+  auto partitioned_edge_sizes(GraphT const& A, Vector const& vert_sizes) {
+
+    Vector cedge_sizes;
+    cedge_sizes.reserve(vert_sizes.size());
+
+    auto begin = A.begin();
+    auto prev_idx = begin.index();
+    for (auto size : vert_sizes) {
+      begin += size;
+      cedge_sizes.push_back(begin.index() - prev_idx);
+      prev_idx = begin.index();
+    }
+
+    return cedge_sizes;
+  }
+
+  template <adjacency_list_graph Graph, class Vector, int idx>
+  auto distribute_compressed(adjacency<idx>& A, Vector&& vert_sizes, Vector&& edge_sizes) {
+    nw::util::life_timer _(__func__);
+    auto num_vertices = A.num_vertices()[0];
+    auto num_edges = A.num_edges();
+    Graph B(num_vertices, num_edges, std::forward<Vector>(vert_sizes),
+            std::forward<Vector>(edge_sizes), A, "pg", hpx::find_all_localities());
+
+    return B;
+  }
+
   //  using default_execution_policy = std::execution::parallel_unsequenced_policy;
   //
   //  template <int idx, edge_list_graph edge_list_t, class ExecutionPolicy =

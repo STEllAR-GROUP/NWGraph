@@ -67,6 +67,7 @@ static constexpr char USAGE[] =
 #include <nlohmann/json.hpp>
 
 #include <hpx/include/partitioned_vector.hpp>
+#include <nwgraph/partitioned_build.hpp>
 
 using unsigned_int = unsigned int;
 HPX_REGISTER_PARTITIONED_VECTOR(unsigned_int)
@@ -91,91 +92,6 @@ static void clean(edge_list<directedness::undirected>& A, std::string const& suc
   lexical_sort_by<id>(A);
   uniq(A);
   remove_self_loops(A);
-}
-
-auto vertex_sizes(size_t num_partitions, size_t all_vertices) {
-
-  std::vector<size_t> vert_sizes;
-  vert_sizes.reserve(num_partitions);
-
-  size_t part_size = (all_vertices + num_partitions - 1) / num_partitions;
-  for (size_t part = 0, num_vertices = 0; part != num_partitions;
-       ++part, num_vertices += part_size) {
-
-    assert(all_vertices >= num_vertices);
-    size_t this_part_size =
-      (num_vertices + part_size > all_vertices ? all_vertices - num_vertices : part_size);
-
-    vert_sizes.push_back(this_part_size);
-  }
-
-  return vert_sizes;
-}
-
-template <adjacency_list_graph GraphT, class Vector>
-auto edge_sizes(GraphT const& A, Vector const& vert_sizes) {
-
-  Vector cedge_sizes;
-  cedge_sizes.reserve(vert_sizes.size());
-
-  auto begin = A.begin();
-  auto prev_idx = begin.index();
-  for (auto size : vert_sizes) {
-    begin += size;
-    cedge_sizes.push_back(begin.index() - prev_idx);
-    prev_idx = begin.index();
-  }
-
-  return cedge_sizes;
-}
-
-inline auto compress(edge_list<directedness::undirected>& A) {
-  life_timer _(__func__);
-  adjacency<0> B(num_vertices(A));
-  push_back_fill(A, B);
-  return B;
-}
-
-template <adjacency_list_graph adjacency_t, typename... Ts>
-auto partitioned_push_back_fill_helper(size_t idx, adjacency_t& cs,
-                                       std::tuple<Ts...> const& theTuple) {
-  std::apply([&](Ts const&... args) { cs.push_at(idx, args...); }, theTuple);
-}
-
-template <edge_list_c edge_list_t, adjacency_list_graph adjacency_t>
-void partitioned_push_back_fill(edge_list_t& el, adjacency_t& cs) {
-  cs.open_for_push_back();
-
-  std::for_each(el.begin(), el.end(), [&, idx = 0](auto&& elt) mutable
-                { partitioned_push_back_fill_helper(idx++, cs, elt); });
-
-  cs.close_for_push_back();
-}
-
-template <adjacency_list_graph adjacency_t>
-void partitioned_copy(adjacency_t const& src, adjacency_t& dest) {
-
-  dest.get_indices().copy_data_from(src.get_indices());
-  dest.get_to_be_indexed().copy_data_from(src.get_to_be_indexed());
-}
-
-template <adjacency_list_graph Graph, class Vector>
-auto compress(edge_list<directedness::undirected>& A, Vector&& vert_sizes, Vector&& edge_sizes) {
-  life_timer _(__func__);
-  Graph B(num_vertices(A), num_edges(A), std::forward<Vector>(vert_sizes),
-          std::forward<Vector>(edge_sizes), "local_pg", std::vector({hpx::find_here()}));
-  partitioned_push_back_fill(A, B);
-  return B;
-}
-
-template <adjacency_list_graph Graph, class Vector>
-auto distribute_compressed(size_t num_vertices, size_t num_edges, Graph& A, Vector&& vert_sizes,
-                           Vector&& edge_sizes) {
-  life_timer _(__func__);
-  Graph B(num_vertices, num_edges, std::forward<Vector>(vert_sizes),
-          std::forward<Vector>(edge_sizes), "pg", hpx::find_all_localities());
-  partitioned_copy(A, B);
-  return B;
 }
 
 // heuristic to see if sufficiently dense power-law graph
@@ -286,22 +202,6 @@ auto args_log(Args const& args) {
   return arg_log;
 }
 
-template <directedness Directedness, class... Attributes>
-edge_list<Directedness, Attributes...> load_binary_graph(std::string file) {
-
-  std::filesystem::path p(file), ext(".bmtk");
-  p.replace_extension(ext);
-  if (exists(p)) {
-    edge_list<Directedness, Attributes...> el;
-    el.deserialize(p.string());
-    return el;
-  }
-
-  auto el = load_graph<Directedness, Attributes...>(file);
-  el.serialize(p.string());
-  return el;
-}
-
 template <typename Graph>
 void run_bench(int argc, char* argv[]) {
   std::vector<std::string> strings(argv + 1, argv + argc);
@@ -355,25 +255,25 @@ void run_bench(int argc, char* argv[]) {
       relabel_time = 0.0;
     }
 
+
     // Clean up the edgelist to deal with the normal issues related to
     // undirectedness.
     auto&& [clean_time] = time_op([&] { clean<0>(el_a, succession); });
 
-    auto local_cel_a = compress(el_a);
+    auto local_cel_a = build_adjacency<0>(el_a);
 
-    auto cvert_sizes = vertex_sizes(num_partitions, num_vertices(el_a));
-    auto cedge_sizes = edge_sizes(local_cel_a, cvert_sizes);
-
-    // create a local copy of the partitioned graph
-    auto l_cel_a = compress<Graph>(el_a, cvert_sizes, cedge_sizes);
-
-    // now distribute the partitioned data
-    auto cel_a = distribute_compressed(num_vertices(el_a), num_edges(el_a), l_cel_a,
-                                       std::move(cvert_sizes), std::move(cedge_sizes));
+    auto cvert_sizes = partitioned_vertex_sizes(num_partitions, num_vertices(el_a));
+    auto cedge_sizes = partitioned_edge_sizes(local_cel_a, cvert_sizes);
 
     // free memory
     el_a = edge_list<nw::graph::directedness::undirected>{};
-    l_cel_a = Graph{};
+
+    //// now distribute the partitioned data
+    auto cel_a =
+      distribute_compressed<Graph>(local_cel_a, std::move(cvert_sizes), std::move(cedge_sizes));
+
+    // free memory
+    local_cel_a = adjacency<0>{};
 
     //    if (debug) {
     // cel_a.stream_indices();

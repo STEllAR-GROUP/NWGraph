@@ -22,7 +22,7 @@
 #include "nwgraph/adjacency.hpp"
 #include "nwgraph/containers/partitioned_compressed.hpp"
 
-//#include "nwgraph/partitioned_build.hpp"
+// #include "nwgraph/partitioned_build.hpp"
 
 #include <array>
 #include <concepts>
@@ -121,14 +121,30 @@ using compressed = partitioned_index_compressed<default_index_t, default_vertex_
       , base(N, N + 1, M, std::forward<Vector>(index_sizes),
              std::forward<Vector>(to_be_index_sizes), generate_name<idx>(name), localities) {}
 
+    /**
+     * @brief Constructor of partitioned_index_adjacency. Require the type of the graph to be
+     * unipartite. Copies loc_adj to the partitioned_index_adjacency.
+     */
     template <typename Vector>
     partitioned_index_adjacency(
-      size_t N, size_t N1, size_t M, Vector&& index_sizes, Vector&& to_be_index_sizes, char const* name = "pg",
+      size_t N, size_t M, Vector&& index_sizes, Vector&& to_be_index_sizes,
+      adjacency<idx>& local_adj, char const* name = "pg",
       std::vector<hpx::id_type> const& localities = hpx::find_all_localities())
       requires(std::is_same_v<unipartite_graph_base, unipartite_graph_base>)
       : unipartite_graph_base(N)
-      , base(N, N1, M, std::forward<Vector>(index_sizes),
-             std::forward<Vector>(to_be_index_sizes), generate_name<idx>(name), localities) {}
+      , base(N, N + 1, M, std::forward<Vector>(index_sizes),
+             std::forward<Vector>(to_be_index_sizes), local_adj, generate_name<idx>(name),
+             localities) {}
+
+    template <typename Vector>
+    partitioned_index_adjacency(
+      size_t N, size_t N1, size_t M, Vector&& index_sizes, Vector&& to_be_index_sizes,
+      char const* name = "pg",
+      std::vector<hpx::id_type> const& localities = hpx::find_all_localities())
+      requires(std::is_same_v<unipartite_graph_base, unipartite_graph_base>)
+      : unipartite_graph_base(N)
+      , base(N, N1, M, std::forward<Vector>(index_sizes), std::forward<Vector>(to_be_index_sizes),
+             generate_name<idx>(name), localities) {}
 
     // Create reference to partitioned_index_adjacency
     partitioned_index_adjacency ref() const { return partitioned_index_adjacency(*this, true); }
@@ -153,7 +169,7 @@ using compressed = partitioned_index_compressed<default_index_t, default_vertex_
       , base(A.num_vertices()[0] + 1, A.num_vertices()[0] + 1, A.num_edges(),
              std::forward<Vector>(index_sizes), std::forward<Vector>(to_be_index_sizes),
              generate_name<idx>(name), localities) {
-      //partitioned_fill<idx>(A, *this, sort_adjacency, policy);
+      // partitioned_fill<idx>(A, *this, sort_adjacency, policy);
     }
 
     // template <class ExecutionPolicy = std::execution::parallel_unsequenced_policy>

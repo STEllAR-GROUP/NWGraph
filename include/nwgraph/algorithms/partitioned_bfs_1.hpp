@@ -66,7 +66,7 @@ namespace nw::graph {
 
       if (curr_parent == std::numeric_limits<Vertex>::max()) {
         while (!parent.compare_exchange_strong(curr_parent, u,
-                                               std::memory_order::memory_order_acq_rel)) {
+                                               std::memory_order::acq_rel)) {
           if (u >= curr_parent) {
             // since we last checked, some other thread has set a better parent
             return false;

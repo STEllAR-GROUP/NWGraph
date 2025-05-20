@@ -109,4 +109,8 @@ if (NWGRAPH_USE_HPX)
     add_executable(dbfs.exe dbfs.cpp)
     target_link_libraries(dbfs.exe bench_lib nlohmann_json::nlohmann_json nwgraph_hpx)
     add_dependencies(bench dbfs.exe)
+
+    add_executable(dpr.exe dpr.cpp)
+    target_link_libraries(dpr.exe bench_lib nlohmann_json::nlohmann_json nwgraph_hpx)
+    add_dependencies(bench dpr.exe)
 endif()

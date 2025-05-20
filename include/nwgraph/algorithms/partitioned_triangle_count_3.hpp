@@ -91,8 +91,8 @@ namespace nw::graph {
             neighbors.push_back(std::make_tuple(v));
           }
 
-          auto& rc = remote_counts.get();
-          std::get<0>(rc) += triangles;
+          auto* rc = &remote_counts.get();
+          std::get<0>(*rc) += triangles;
 
           // launch remote operations for the current vertex (if any)
           if (!v_targets.empty()) {
@@ -106,17 +106,22 @@ namespace nw::graph {
 
             // now store this vertex list in collection of messages to send
             for (auto&& [id, vertices] : target_vertices) {
-              auto& targets = std::get<1>(rc)[id];
+              auto& targets = std::get<1>(*rc)[id];
+
+              // store list of vertices with their neighbors in any case
+              targets.push_back(std::make_tuple(std::move(vertices), neighbors));
 
               // if batch size has been reached, trigger async operation
               if (targets.size() >= batchsize) {
                 triangle_count_action_1<Graph> act;
-                std::get<2>(rc).push_back(hpx::async(act, id, hpx::ref(G), std::move(targets)));
+                auto tmp = std::move(targets);
                 targets = target_list_t{};
+                auto fut = hpx::async(act, id, hpx::ref(G), std::move(tmp));
+                // hpx::async may suspend, so update the thread-local reference,
+                // in case we are on a different thread
+                rc = &remote_counts.get();
+                std::get<2>(*rc).push_back(std::move(fut));
               }
-
-              // store list of vertices with their neighbors in any case
-              targets.push_back(std::make_tuple(std::move(vertices), neighbors));
             }
           }
         };
