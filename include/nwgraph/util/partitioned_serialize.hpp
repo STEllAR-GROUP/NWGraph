@@ -3,11 +3,11 @@
 #include <iostream>
 
 #include "nwgraph/adjacency.hpp"
+#include "nwgraph/algorithms/partitioned_algorithm.hpp"
 #include "nwgraph/edge_list.hpp"
 #include "nwgraph/graph_base.hpp"
 #include "nwgraph/io/mmio.hpp"
 #include "nwgraph/partitioned_adjacency.hpp"
-#include "nwgraph/algorithms/partitioned_algorithm.hpp"
 
 #include <hpx/async_combinators/wait_all.hpp>
 #include <hpx/executors/execution_policy.hpp>
@@ -17,7 +17,7 @@
 
 namespace nw::graph {
 
-namespace detail {
+  namespace detail {
 
     auto partitioned_vertex_sizes(size_t num_partitions, size_t all_vertices) {
 
@@ -61,7 +61,17 @@ namespace detail {
 
   } // namespace detail
 
-  void serialize_adj(std::string mtx_file, size_t max_part_size) {
+  // max_part_size limits the size of the .mtx file that is loaded into memory at once,
+  // which is useful for very large graphs.
+  void serialize_adj(std::string mtx_file, size_t max_part_size = 2 << 26) {
+
+    std::string file_name = detail::get_adj_filename(mtx_file);
+
+    if (std::filesystem::exists(file_name)) {
+      std::cout << "Adjacency file already exists: " << file_name << ". Skipping serialization."
+                << std::endl;
+      return;
+    }
 
     // Get matrix size
     std::ifstream in_stream(mtx_file);
@@ -69,7 +79,6 @@ namespace detail {
     size_t n_parts = (n_vertices + max_part_size - 1) / max_part_size;
     auto part_sizes = detail::partitioned_vertex_sizes(n_parts, n_vertices);
 
-    std::string file_name = detail::get_adj_filename(mtx_file);
 
     char magic[] = "NWGRAPH ADJACENCY BINARY FILE";
 
@@ -238,12 +247,12 @@ namespace detail {
           "read_partitioned_adj_part") {}
 
     template <typename ExPolicy>
-    static int sequential(ExPolicy&&, partitioned_adjacency<0> G, size_t first_index, size_t last_index,
-                    std::string file_name) {
+    static int sequential(ExPolicy&&, partitioned_adjacency<0> G, size_t first_index,
+                          size_t last_index, std::string file_name) {
 
       auto [indices, to_be_indexed] = deserialize_adj_part(file_name, first_index, last_index);
       if (last_index != G.size()) {
-        indices.pop_back();  // Will be included in the next partition.
+        indices.pop_back(); // Will be included in the next partition.
       }
       auto p_indices = G.get_indices().get_local_iterator(first_index).local();
       auto first_to_be_idx = indices.front();
@@ -257,17 +266,15 @@ namespace detail {
 
     template <typename ExPolicy>
     static int parallel(ExPolicy&&, partitioned_adjacency<0> G, size_t first_index,
-                       size_t last_index,
-                 std::string file_name) {
+                        size_t last_index, std::string file_name) {
       return 0;
     }
   };
 
 
-
-  //struct read_partitioned_adj_part_action
-  //  : hpx::actions::action<decltype(&read_partitioned_adj_part), &read_partitioned_adj_part,
-  //                         read_partitioned_adj_part_action> {};
+  // struct read_partitioned_adj_part_action
+  //   : hpx::actions::action<decltype(&read_partitioned_adj_part), &read_partitioned_adj_part,
+  //                          read_partitioned_adj_part_action> {};
 
 
   auto partitioned_deserialize_adj(std::string mtx_file) {
@@ -294,8 +301,7 @@ namespace detail {
     partitioned_adjacency<0> G(n_vertices, n_edges, part_sizes, edge_sizes, "pg",
                                hpx::find_all_localities());
 
-    partitioned_algorithm<read_partitioned_adj_part>(
-      hpx::execution::seq, G, file_name);
+    partitioned_algorithm<read_partitioned_adj_part>(hpx::execution::seq, G, file_name);
 
     return G;
   }

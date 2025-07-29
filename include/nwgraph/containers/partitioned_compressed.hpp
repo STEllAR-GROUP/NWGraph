@@ -674,7 +674,7 @@ namespace nw::graph {
       return *this;
     }
 
-    partitioned_indexed_outer_iterator operator++(int) const {
+    partitioned_indexed_outer_iterator operator++(int) {
       partitioned_indexed_outer_iterator tmp(*this);
       ++i_;
       return tmp;
@@ -686,7 +686,7 @@ namespace nw::graph {
       return *this;
     }
 
-    partitioned_indexed_outer_iterator operator--(int) const {
+    partitioned_indexed_outer_iterator operator--(int) {
       partitioned_indexed_outer_iterator tmp(*this);
       --i_;
       return tmp;

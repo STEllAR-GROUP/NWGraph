@@ -41,10 +41,12 @@ static constexpr const char USAGE[] =
 #include "Log.hpp"
 #include "common.hpp"
 
-#include "nwgraph/partitioned_adjacency.hpp"
+#include <nwgraph/util/partitioned_serialize.hpp>
 #include "nwgraph/algorithms/partitioned_page_rank_0.hpp"
 #include "nwgraph/algorithms/partitioned_page_rank_1.hpp"
+#include "nwgraph/algorithms/partitioned_page_rank_2.hpp"
 #include "nwgraph/experimental/algorithms/page_rank.hpp"
+#include "nwgraph/partitioned_adjacency.hpp"
 
 
 #include <hpx/include/partitioned_vector.hpp>
@@ -61,8 +63,7 @@ using namespace nw::graph;
 using namespace nw::util;
 
 template <typename T>
-void copy_to(std::vector<T>& local_src, hpx::partitioned_vector<T>& dest)
-{
+void copy_to(std::vector<T>& local_src, hpx::partitioned_vector<T>& dest) {
   auto const sizes = dest.get_partition_sizes();
   auto const dest_partitions = sizes.size();
   std::vector<std::size_t> const empty;
@@ -115,6 +116,9 @@ int hpx_main(int argc, char* argv[]) {
 
     auto el_a = load_binary_graph<nw::graph::directedness::directed>(file);
 
+    serialize_adj(file);
+    auto G = partitioned_deserialize_adj(file);
+
     auto loc_graph = build_adjacency<0>(el_a);
     auto loc_degrees = degrees(loc_graph);
 
@@ -123,7 +127,7 @@ int hpx_main(int argc, char* argv[]) {
 
     // free non-needed memory
     if (!verify)
-        el_a = edge_list<nw::graph::directedness::directed>{};
+      el_a = edge_list<nw::graph::directedness::directed>{};
 
     auto graph = distribute_compressed<partitioned_adjacency<0>>(loc_graph, std::move(cvert_sizes),
                                                                  std::move(cedge_sizes));
@@ -131,19 +135,14 @@ int hpx_main(int argc, char* argv[]) {
     using vertex_id_type = typename decltype(graph)::vertex_id_type;
 
     auto sizes = graph.indices_.get_partition_sizes();
-    
+
     using degree_type = typename decltype(loc_degrees)::value_type;
     hpx::partitioned_vector<degree_type> p_degrees(
-      loc_degrees.size(), 0.0,
+      loc_degrees.begin(), loc_degrees.end(),
       hpx::explicit_container_layout(sizes, graph.indices_.get_partition_localities()));
+
     p_degrees.register_as("p_degrees");
 
-    {
-      nw::util::life_timer _("distribute degrees");
-      copy_to(loc_degrees, p_degrees);
-    }
-    
-  
 
     hpx::partitioned_vector<float> p_rankings(
       graph.indices_.size(), 0.0,
@@ -166,16 +165,24 @@ int hpx_main(int argc, char* argv[]) {
                 partitioned_page_rank_1(graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters,
                                         batchsize);
                 break;
-
+              case 2:
+                partitioned_page_rank_2(graph, p_rankings, 0.85f, tolerance, max_iters);
+                break;
               default:
                 std::cerr << "Unknown version id " << id << std::endl;
                 break;
               }
-            }, tolerance);
+            },
+            tolerance);
         }
 
-        if (verify) {
-          std::cout << "Verifying..." << std::endl; 
+        if (verify && id == 2) {
+          std::cout << "Skipping verification for partitioned_page_rank_2, as it assumes inverse "
+                       "edge directionality."
+                    << std::endl;
+        }
+        else if (verify) {
+          std::cout << "Verifying..." << std::endl;
           nw::util::life_timer _("verification");
 
           std::vector<float> local_rankings(loc_graph.size());
@@ -190,7 +197,6 @@ int hpx_main(int argc, char* argv[]) {
           if (max_err > err_threshold) {
             std::cerr << "Results do not match\n";
           }
-
         }
       }
     }
