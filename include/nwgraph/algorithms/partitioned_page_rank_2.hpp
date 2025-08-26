@@ -31,6 +31,9 @@
 #include <hpx/parallel/segmented_algorithms/detail/dispatch.hpp>
 #include <hpx/parallel/util/detail/algorithm_result.hpp>
 
+#include <hpx/threading_base/annotated_function.hpp>
+#include <hpx/threading_base/scoped_annotation.hpp>
+
 #include <hpx/barrier.hpp>
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -42,6 +45,8 @@ namespace nw::graph {
     static void do_page_rank_packet_2(
       std::vector<std::tuple<typename Graph::vertex_id_type, Real>>&& incoming_packet,
       hpx::partitioned_vector<Real> page_rank) {
+
+      hpx::scoped_annotation annotation("do_page_rank_packet_2");
 
       for (auto&& [v_dest, val] : incoming_packet) {
         auto pr_iter = page_rank.get_local_iterator(v_dest).local();
@@ -94,10 +99,13 @@ namespace nw::graph {
 
         using vertex_id_type = typename Graph::vertex_id_type;
 
-        // Initialize values to base_score
         auto to_pr_iter = to_page_rank.get_local_iterator(first_index).local();
-        for (auto v_it = first; v_it != last; v_it++, to_pr_iter++) {
-          *to_pr_iter = base_score;
+        {
+          hpx::scoped_annotation annotation("page_rank_2::init_base_score");
+          // Initialize values to base_score
+          for (auto v_it = first; v_it != last; v_it++, to_pr_iter++) {
+            *to_pr_iter = base_score;
+          }
         }
 
         //
@@ -107,39 +115,46 @@ namespace nw::graph {
         std::vector<hpx::future<void>> remote_ops;
         auto from_pr_iter = from_page_rank.get_local_iterator(first_index).local();
 
-        for (auto v_it = first; v_it != last; v_it++, from_pr_iter++) {
-          auto v_id = v_it.index();
-          auto neighbour_range = *v_it;
-          auto out_degree = neighbour_range.size();
-          auto out_rank = damping_factor * (*from_pr_iter) / out_degree;
-          // for each neighbour
-          for (auto&& e : neighbour_range) {
-            auto v = target(G, e);
-            auto loc_id = vertex_locality(G, v);
-            if (loc_id == this_locality_id) {
-              // local contribution
-              auto local_it = to_page_rank.get_local_iterator(v).local();
-              *local_it += out_rank;
-            }
-            else {
-              // remote contribution
-              outgoing_packets[loc_id].push_back({v, out_rank});
+        {
+          hpx::scoped_annotation annotation("page_rank_2::compute_contributions");
+          for (auto v_it = first; v_it != last; v_it++, from_pr_iter++) {
+            auto v_id = v_it.index();
+            auto neighbour_range = *v_it;
+            auto out_degree = neighbour_range.size();
+            auto out_rank = damping_factor * (*from_pr_iter) / out_degree;
+            // for each neighbour
+            for (auto&& e : neighbour_range) {
+              auto v = target(G, e);
+              auto loc_id = vertex_locality(G, v);
+              if (loc_id == this_locality_id) {
+                // local contribution
+                auto local_it = to_page_rank.get_local_iterator(v).local();
+                *local_it += out_rank;
+              }
+              else {
+                // remote contribution
+                outgoing_packets[loc_id].push_back({v, out_rank});
+              }
             }
           }
         }
 
-        // Send remote contributions
-        for (auto&& [id, packet] : outgoing_packets) {
-          using act_t = page_rank_action_2<Graph, Real>;
-          remote_ops.push_back(hpx::async<act_t>(id, std::move(packet), hpx::ref(to_page_rank)));
+        {
+          hpx::scoped_annotation annotation("page_rank_2::remote_contributions");
+          // Send remote contributions
+          for (auto&& [id, packet] : outgoing_packets) {
+            using act_t = page_rank_action_2<Graph, Real>;
+            remote_ops.push_back(hpx::async<act_t>(id, std::move(packet), hpx::ref(to_page_rank)));
+          }
+
+          // Wait for remote contributions to be received
+          hpx::wait_all(remote_ops);
         }
 
-        // Wait for remote contributions to be received
-        hpx::wait_all(remote_ops);
 
         // Barrier, only return after all localities have finished their work
         // TODO: limit to localities that own part of the distributed vector
-        // 
+        //
         // Hack, assume this function runs once for each graph partition
         auto get_segment_barrier = [](auto& partitioned_vec, size_t idx)
         {
@@ -151,8 +166,11 @@ namespace nw::graph {
                                            part_idx);
         };
 
-        auto barrier = get_segment_barrier(to_page_rank, first_index);
-        barrier.wait();
+        {
+          hpx::scoped_annotation annotation("page_rank_2::barrier");
+          auto barrier = get_segment_barrier(to_page_rank, first_index);
+          barrier.wait();
+        }
 
 
         // (local) accumulated result is now fully computed
@@ -162,8 +180,11 @@ namespace nw::graph {
         to_pr_iter = to_page_rank.get_local_iterator(first_index).local();
         from_pr_iter = from_page_rank.get_local_iterator(first_index).local();
 
-        for (auto v_it = first; v_it != last; ++v_it, ++to_pr_iter, ++from_pr_iter) {
-          local_error += fabs(*to_pr_iter - *from_pr_iter);
+        {
+          hpx::scoped_annotation annotation("page_rank_2::compute_error");
+          for (auto v_it = first; v_it != last; ++v_it, ++to_pr_iter, ++from_pr_iter) {
+            local_error += fabs(*to_pr_iter - *from_pr_iter);
+          }
         }
 
         return local_error;
@@ -181,11 +202,11 @@ namespace nw::graph {
 
   template <adjacency_list_graph Graph, typename Real = double>
   void partitioned_page_rank_2(Graph& G,
-                               //hpx::partitioned_vector<typename Graph::vertex_id_type>& degrees,
                                hpx::partitioned_vector<Real>& page_rank,
                                const Real damping_factor = 0.85, const Real threshold = 1.e-4,
                                const size_t max_iters = std::numeric_limits<unsigned int>::max()) {
 
+    hpx::scoped_annotation annotation("partitioned_page_rank_2");
 
     const Real init_score = 1.0 / G.size();
     const Real base_score = (1.0 - damping_factor) / G.size();
@@ -214,6 +235,7 @@ namespace nw::graph {
 
     for (size_t iter = 0; iter < max_iters; ++iter) {
       std::cout << "----- Iteration " << iter << " ----- " << std::endl;
+      hpx::scoped_annotation annotation("page_rank_iter");
 
       //for (auto i = 0; i < page_rank.size(); ++i) {
       //  std::cout << "Node " << i << " : " << page_rank[i] << std::endl;
