@@ -45,6 +45,7 @@ static constexpr const char USAGE[] =
 #include "nwgraph/algorithms/partitioned_page_rank_0.hpp"
 #include "nwgraph/algorithms/partitioned_page_rank_1.hpp"
 #include "nwgraph/algorithms/partitioned_page_rank_2.hpp"
+#include "nwgraph/algorithms/partitioned_util.hpp"
 #include "nwgraph/experimental/algorithms/page_rank.hpp"
 #include "nwgraph/partitioned_adjacency.hpp"
 
@@ -114,35 +115,15 @@ int hpx_main(int argc, char* argv[]) {
 
   for (auto&& file : files) {
 
-    auto el_a = load_binary_graph<nw::graph::directedness::directed>(file);
 
     serialize_adj(file);
-    auto G = partitioned_deserialize_adj(file);
-
-    auto loc_graph = build_adjacency<0>(el_a);
-    auto loc_degrees = degrees(loc_graph);
-
-    auto cvert_sizes = partitioned_vertex_sizes(num_partitions, num_vertices(el_a));
-    auto cedge_sizes = partitioned_edge_sizes(loc_graph, cvert_sizes);
-
-    // free non-needed memory
-    if (!verify)
-      el_a = edge_list<nw::graph::directedness::directed>{};
-
-    auto graph = distribute_compressed<partitioned_adjacency<0>>(loc_graph, std::move(cvert_sizes),
-                                                                 std::move(cedge_sizes));
+    auto graph = partitioned_deserialize_adj(file);
 
     using vertex_id_type = typename decltype(graph)::vertex_id_type;
 
     auto sizes = graph.indices_.get_partition_sizes();
 
-    using degree_type = typename decltype(loc_degrees)::value_type;
-    hpx::partitioned_vector<degree_type> p_degrees(
-      loc_degrees.begin(), loc_degrees.end(),
-      hpx::explicit_container_layout(sizes, graph.indices_.get_partition_localities()));
-
-    p_degrees.register_as("p_degrees");
-
+    auto p_degrees = partitioned_degrees(graph);
 
     hpx::partitioned_vector<float> p_rankings(
       graph.indices_.size(), 0.0,
@@ -166,6 +147,9 @@ int hpx_main(int argc, char* argv[]) {
                                         batchsize);
                 break;
               case 2:
+                // This doesn't need a seperate degrees vector, because it assumes the inverse
+                // edge directionality, meaning that the out-degrees is the size of the adjacency
+                // list of each vertex.
                 partitioned_page_rank_2(graph, p_rankings, 0.85f, tolerance, max_iters);
                 break;
               default:
@@ -185,9 +169,14 @@ int hpx_main(int argc, char* argv[]) {
           std::cout << "Verifying..." << std::endl;
           nw::util::life_timer _("verification");
 
-          std::vector<float> local_rankings(loc_graph.size());
 
-          page_rank_v1(loc_graph, loc_degrees, local_rankings, 0.85f, tolerance, max_iters);
+          // Load local copy of the graph
+           auto el_a = load_binary_graph<nw::graph::directedness::directed>(file);
+           auto loc_graph = build_adjacency<0>(el_a);
+           auto loc_degrees = degrees(loc_graph);
+          
+           std::vector<float> local_rankings(loc_graph.size());
+           page_rank_v1(loc_graph, loc_degrees, local_rankings, 0.85f, tolerance, max_iters);
 
           float err_threshold = 1e-2; // arbitrary
           float max_err = 0;
