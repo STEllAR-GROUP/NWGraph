@@ -29,6 +29,7 @@
 #include <hpx/include/partitioned_vector_predef.hpp>
 #include <hpx/parallel/segmented_algorithms/detail/dispatch.hpp>
 #include <hpx/parallel/util/detail/algorithm_result.hpp>
+#include <hpx/concurrency/cache_line_data.hpp>
 
 ///////////////////////////////////////////////////////////////////////////////
 namespace nw::graph {
@@ -73,25 +74,28 @@ namespace nw::graph {
       safe_object()
         : data_(hpx::get_os_thread_count()) {}
 
+      safe_object(T const& init)
+        : data_(hpx::get_os_thread_count(), init) {}
+
       safe_object(safe_object const& rhs) = delete;
       safe_object(safe_object&& rhs) noexcept = default;
 
       safe_object& operator=(safe_object const& rhs) = delete;
       safe_object& operator=(safe_object&& rhs) noexcept = default;
 
-      T& get() { return data_[hpx::get_worker_thread_num()]; }
+      T& get() { return data_[hpx::get_worker_thread_num()].data_; }
 
-      T const& get() const { return data_[hpx::get_worker_thread_num()]; }
+      T const& get() const { return data_[hpx::get_worker_thread_num()].data_; }
 
       template <typename F>
       void reduce(F const& f) {
         for (auto&& d : std::move(data_)) {
-          f(std::move(d));
+          f(std::move(d.data_));
         }
       }
 
     private:
-      std::vector<T> data_;
+      std::vector<hpx::util::cache_line_data<T>> data_;
     };
 
     ////////////////////////////////////////////////////////////////////////////

@@ -41,14 +41,15 @@ namespace nw::graph {
                              &out_degree_count_packet<Graph>, out_degree_count_action<Graph>> {};
 
 
-    struct out_degree_count : hpx::parallel::detail::algorithm<out_degree_count> {
+    struct out_degree_count : hpx::parallel::detail::algorithm<out_degree_count, int> {
 
       constexpr out_degree_count() noexcept
-        : hpx::parallel::detail::algorithm<out_degree_count>("out_degree_count") {}
+        : hpx::parallel::detail::algorithm<out_degree_count, int>("out_degree_count") {}
 
 
       template <typename ExPolicy, typename Graph>
-      static void sequential(ExPolicy&& policy, Graph G, const size_t first_index,
+      static int
+      sequential(ExPolicy&& policy, Graph G, const size_t first_index,
                              const size_t last_index,
                              hpx::partitioned_vector<typename Graph::vertex_id_type> degrees) {
 
@@ -96,13 +97,17 @@ namespace nw::graph {
         }
 
         hpx::wait_all(remote_ops);
+
+        return 0;
       }
 
       template <typename ExPolicy, typename Graph>
-      static void parallel(ExPolicy&& policy, Graph G, const size_t first_index,
+      static int
+      parallel(ExPolicy&& policy, Graph G, const size_t first_index,
                              const size_t last_index,
                              hpx::partitioned_vector<typename Graph::vertex_id_type> degrees) {
       // boop
+        return 0;
       }
     };
 
@@ -110,14 +115,14 @@ namespace nw::graph {
 
     
 
-    struct in_degree_count : hpx::parallel::detail::algorithm<in_degree_count> {
+    struct in_degree_count : hpx::parallel::detail::algorithm<in_degree_count, int> {
 
       constexpr in_degree_count() noexcept
-        : hpx::parallel::detail::algorithm<in_degree_count>("in_degree_count") {}
+        : hpx::parallel::detail::algorithm<in_degree_count, int>("in_degree_count") {}
 
 
       template <typename ExPolicy, typename Graph>
-      static void sequential(ExPolicy&& policy, Graph G, const size_t first_index,
+      static int sequential(ExPolicy&& policy, Graph G, const size_t first_index,
                              const size_t last_index,
                              hpx::partitioned_vector<typename Graph::vertex_id_type> degrees) {
 
@@ -137,13 +142,16 @@ namespace nw::graph {
           *deg_iter = v_it->size();
         }
 
+        return 0;
+
       }
 
       template <typename ExPolicy, typename Graph>
-      static void parallel(ExPolicy&& policy, Graph G, const size_t first_index,
+      static int parallel(ExPolicy&& policy, Graph G, const size_t first_index,
                            const size_t last_index,
                            hpx::partitioned_vector<typename Graph::vertex_id_type> degrees) {
         // boop
+          return 0;
       }
     };
 

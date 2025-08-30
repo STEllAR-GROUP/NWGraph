@@ -45,6 +45,7 @@ static constexpr const char USAGE[] =
 #include "nwgraph/algorithms/partitioned_page_rank_0.hpp"
 #include "nwgraph/algorithms/partitioned_page_rank_1.hpp"
 #include "nwgraph/algorithms/partitioned_page_rank_2.hpp"
+#include "nwgraph/algorithms/partitioned_page_rank_3.hpp"
 #include "nwgraph/algorithms/partitioned_util.hpp"
 #include "nwgraph/experimental/algorithms/page_rank.hpp"
 #include "nwgraph/partitioned_adjacency.hpp"
@@ -151,6 +152,9 @@ int hpx_main(int argc, char* argv[]) {
                 // edge directionality, meaning that the out-degrees is the size of the adjacency
                 // list of each vertex.
                 partitioned_page_rank_2(graph, p_rankings, 0.85f, tolerance, max_iters);
+                break;
+              case 3:
+                partitioned_page_rank_3(graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters);
                 break;
               default:
                 std::cerr << "Unknown version id " << id << std::endl;
