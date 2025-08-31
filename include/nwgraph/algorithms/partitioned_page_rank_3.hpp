@@ -131,22 +131,38 @@ namespace nw::graph {
             });
         };
 
-        // Thread local (shallow) copy of G
-        safe_object<Graph> tl_G(G);
+
+        //// Thread local (shallow) copy of G
+        //safe_object<Graph> tl_G(G);
+
+        // Thread local copies of the iterators
+        auto tl_iters = safe_object(std::make_tuple(ac_first, pr_first, deg_first));
 
         // Iterate over all local vertices
         hpx::experimental::for_loop(hpx::execution::par, first_index, last_index,
             [&](auto&& u) {
    
+            //auto ac_iter = accumulated_contributions.get_local_iterator(u).local();
 
             // For each neighbor of u
-            for (auto&& elt : tl_G.get()[u]) {
+            for (auto&& elt : G[u]) {
                 
-                idx_t v = target(tl_G.get(), elt);
-                auto v_locality = vertex_locality(tl_G.get(), v);
+                idx_t v = target(G, elt);
+                auto v_locality = vertex_locality(G, v);
                 if (v_locality == this_locality) {
+                  auto& ac_iter = std::get<0>(tl_iters.get()); //+ (u - first_index);
+                  ac_iter += (u - first_index);
                   auto offs = v - first_index;
-                  *(ac_first + offs) += *(pr_first + offs) / *(deg_first + offs);
+                  auto& pr_iter = std::get<1>(tl_iters.get()); //+ offs;
+                  auto& deg_iter = std::get<2>(tl_iters.get()); //+ offs;
+                  pr_iter += offs;
+                  deg_iter += offs;
+                  //auto pr_iter = page_rank.get_local_iterator(v).local();
+                  //auto deg_iter = degrees.get_local_iterator(v).local();
+                  *(ac_iter) += *(pr_iter) / *(deg_iter);
+                  ac_iter -= (u - first_index);
+                  pr_iter -= offs;
+                  deg_iter -= offs;
                 } else{
                   // Attributes of v are remote, so page_rank[v] / degrees[v] needs to be computed
                   // remotely and sent back to the current 
@@ -190,15 +206,22 @@ namespace nw::graph {
             [&](auto&& u, auto& error)
             {
                 auto offs = u - first_index;
-                auto acc_iter = ac_first + offs;
+                auto& acc_iter = std::get<0>(tl_iters.get()); // +offs;
+                acc_iter += offs;
+                //auto acc_iter = accumulated_contributions.get_local_iterator(u).local();
                 Real z = *acc_iter;
 
-                auto pr_iter = pr_first + offs;
+                auto& pr_iter = std::get<1>(tl_iters.get());// + offs;
+                pr_iter += offs;
+                //auto pr_iter = page_rank.get_local_iterator(u).local();
                 auto old_rank = *pr_iter;
                 auto new_rank = base_score + damping_factor * z;
                 *pr_iter = new_rank;
                 error += fabs(new_rank - old_rank);
                 *acc_iter = 0.0;
+
+                acc_iter -= offs;
+                pr_iter -= offs;
             });
 
         return local_error;
