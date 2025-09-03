@@ -77,7 +77,7 @@ namespace nw::graph {
                              const size_t last_index, hpx::partitioned_vector<Real> page_rank,
                              hpx::partitioned_vector<Real> accumulated_contributions,
                              hpx::partitioned_vector<typename Graph::vertex_id_type> degrees,
-                             Real base_score, Real damping_factor) {
+                             Real base_score, Real damping_factor, size_t batchsize) {
 
         // Compute one Page-Rank iteration
         // For each local node, do:
@@ -167,7 +167,7 @@ namespace nw::graph {
                   auto& packets = map[v_locality];
                   packets.push_back(std::make_tuple(u, v));
                   // If packet for that locality is big enough, send it right away
-                  if (packets.size() >= 1000) {
+                  if (packets.size() >= batchsize) {
                     auto tmp = std::move(packets);
                     packets = packet_vec_t{};
                     auto fut = send_packets(v_locality, std::move(tmp));
@@ -229,7 +229,7 @@ namespace nw::graph {
       }
 
       template <typename ExPolicy, typename Graph, typename IterB, typename IterE>
-      static size_t parallel(ExPolicy&& policy, Graph G, IterB first, IterE last) {
+      static size_t parallel(ExPolicy&& policy, Graph G, IterB first, IterE last, size_t batchsize) {
         return 0;
       }
     };
@@ -243,6 +243,7 @@ namespace nw::graph {
                                hpx::partitioned_vector<typename Graph::vertex_id_type>& degrees,
                                hpx::partitioned_vector<Real>& page_rank,
                                const Real damping_factor = 0.85, const Real threshold = 1.e-4,
+                               size_t batchsize = 10000,
                                const size_t max_iters = std::numeric_limits<unsigned int>::max()) {
 
     const Real init_score = 1.0 / G.size();
@@ -279,7 +280,7 @@ namespace nw::graph {
 
       errors = partitioned_algorithm<detail::page_rank_3<Real>>(
         hpx::execution::seq, G, hpx::ref(page_rank), hpx::ref(accum), hpx::ref(degrees), base_score,
-        damping_factor);
+        damping_factor, batchsize);
 
       Real error = std::transform_reduce(
         errors.begin(), errors.end(), Real(0.0), [](Real count, Real curr) { return count + curr; },

@@ -99,8 +99,8 @@ int hpx_main(int argc, char* argv[]) {
   bool verify = args["--verify"].asBool();
   bool verbose = args["--verbose"].asBool();
   bool debug = args["--debug"].asBool();
-  long trials = args["-n"].asLong() ? args["-n"].asLong() : 1;
-  long max_iters = args["-i"].asLong() ? args["-i"].asLong() : 1;
+  long trials = args["-n"].asLong();
+  long max_iters = args["-i"].asLong();
   float tolerance = std::stof(args["-t"].asString());
   long num_partitions = args["--partitions"].asLong() ? args["--partitions"].asLong()
                                                       : hpx::get_num_localities(hpx::launch::sync);
@@ -154,7 +154,8 @@ int hpx_main(int argc, char* argv[]) {
                 partitioned_page_rank_2(graph, p_rankings, 0.85f, tolerance, max_iters);
                 break;
               case 3:
-                partitioned_page_rank_3(graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters);
+                partitioned_page_rank_3(graph, p_degrees, p_rankings, 0.85f, tolerance,
+                                        batchsize, max_iters);
                 break;
               default:
                 std::cerr << "Unknown version id " << id << std::endl;
