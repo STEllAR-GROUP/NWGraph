@@ -132,9 +132,6 @@ namespace nw::graph {
         };
 
 
-        //// Thread local (shallow) copy of G
-        //safe_object<Graph> tl_G(G);
-
         // Thread local copies of the iterators
         auto tl_iters = safe_object(std::make_tuple(ac_first, pr_first, deg_first));
 
@@ -172,7 +169,7 @@ namespace nw::graph {
                   // If packet for that locality is big enough, send it right away
                   if (packets.size() >= 1000) {
                     auto tmp = std::move(packets);
-                    packets.clear();
+                    packets = packet_vec_t{};
                     auto fut = send_packets(v_locality, std::move(tmp));
                     futures.push_back(std::move(fut));
                    }
@@ -181,21 +178,25 @@ namespace nw::graph {
             });
 
         // Flush remaining packets and wait for remote results to be received
+        std::vector<hpx::future<void>> all_futures;
+
         thread_locals.reduce(
             [&](auto&& data)
           {
-            auto& [map, futures] = data;
+            auto& map = std::get<0>(data);
             for (auto&& [id, packets] : map) {
               if (!packets.empty()) {
                 auto tmp = std::move(packets);
-                packets.clear();
-                futures.push_back(send_packets(id, std::move(tmp)));
+                packets = packet_vec_t{};
+                all_futures.push_back(send_packets(id, std::move(tmp)));
               }
             }
-            
-            hpx::wait_all(futures);
+
+            auto& futures = std::get<1>(data);  
+            std::move(futures.begin(), futures.end(), std::back_inserter(all_futures));
           });
 
+        hpx::wait_all(all_futures);
 
         // (local) accumulated result is now fully computed
         // update the local page rank
