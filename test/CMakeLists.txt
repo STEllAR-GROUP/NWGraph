@@ -89,4 +89,5 @@ nwgraph_add_exe(zip_eg)
 # nwgraph_add_exe(ranges_and_concepts_eg)
 # nwgraph_add_exe(symmetrize_eg)
 
+add_subdirectory(distributed)
 
