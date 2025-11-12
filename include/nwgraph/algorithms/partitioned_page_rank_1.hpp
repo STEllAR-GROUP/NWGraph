@@ -18,9 +18,11 @@
 #error "This file requires using HPX as a backend for NWGraph"
 #endif
 
+#include <nwgraph/util/partitioned_vector_local_partition_view.hpp>
 #include "nwgraph/algorithms/partitioned_algorithm.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <map>
 #include <vector>
@@ -71,12 +73,15 @@ namespace nw::graph {
       constexpr page_rank_1() noexcept
         : hpx::parallel::detail::algorithm<page_rank_1, Real>("page_rank_1") {}
 
+      template <typename T>
+      using local_partition_view =
+        typename nw::graph::util::partitioned_vector_local_partition_view<T, std::vector<T>>;
 
       template <typename ExPolicy, typename Graph>
       static Real sequential(ExPolicy&& policy, Graph G, const size_t first_index,
-                             const size_t last_index, hpx::partitioned_vector<Real> page_rank,
-                             hpx::partitioned_vector<Real> accumulated_contributions,
-                             hpx::partitioned_vector<typename Graph::vertex_id_type> degrees,
+                             const size_t last_index, hpx::partitioned_vector<Real> page_rank_pv,
+                             hpx::partitioned_vector<Real> accum_pv,
+                             hpx::partitioned_vector<typename Graph::vertex_id_type> degrees_pv,
                              Real base_score, Real damping_factor, size_t batchsize) {
 
         // Compute one Page-Rank iteration
@@ -93,69 +98,64 @@ namespace nw::graph {
         // Lambda to request contributions from remote localities, and update the local page rank
         // once the contributions are received
 
+        using vertex_id_type = typename Graph::vertex_id_type;
+
+        local_partition_view<Real> page_rank_loc(page_rank_pv, page_rank_pv.get_partition(first_index));
+        local_partition_view<vertex_id_type> degrees_loc(degrees_pv, degrees_pv.get_partition(first_index));
+        local_partition_view<Real> accum_loc(accum_pv, accum_pv.get_partition(first_index));
+
         auto send_request_packet =
-          [&page_rank, &degrees, &accumulated_contributions](
+          [&page_rank_pv, &degrees_pv, &accum_pv](
             auto&& id, auto&& targets) -> hpx::future<remote_results_type<Graph, Real>>
         {
           using action_t = page_rank_action_1<Graph, Real>;
-          return hpx::async<action_t>(id, std::move(targets), hpx::ref(page_rank),
-                                      hpx::ref(degrees));
+          return hpx::async<action_t>(id, std::move(targets), hpx::ref(page_rank_pv),
+                                      hpx::ref(degrees_pv));
         };
 
-        auto handle_response = [&accumulated_contributions](auto&& f) -> void
+        auto handle_response = [&accum_pv](auto&& f) -> void
         {
           using remote_result_t = remote_results_type<Graph, Real>;
           remote_result_t incoming_packet = f.get();
           for (auto&& [v, incoming_val] : incoming_packet) {
-            auto acc_iter = accumulated_contributions.get_local_iterator(v).local();
+            auto acc_iter = accum_pv.get_local_iterator(v).local();
             std::atomic_ref(*acc_iter) += incoming_val;
           }
         };
 
 
-        std::uint32_t this_locality_id = hpx::get_locality_id();
+        hpx::id_type this_locality_id = hpx::find_here();
 
         auto first = G.begin() + first_index;
         auto last = G.begin() + last_index;
+        auto G_sub = std::ranges::subrange(first, last);
 
-        auto acc_iter = accumulated_contributions.get_local_iterator(first_index).local();
-
-        using vertex_id_type = typename Graph::vertex_id_type;
 
         std::map<hpx::id_type, std::vector<std::tuple<vertex_id_type, vertex_id_type>>>
           outgoing_packets;
 
         std::vector<hpx::future<void>> remote_results;
-        std::vector<vertex_id_type> v_targets;
+        std::vector<std::tuple<vertex_id_type, vertex_id_type>> v_targets;
 
         // for each v in G do
-        for (auto v_it = first; v_it != last; ++v_it, ++acc_iter) {
+        // for (auto edge_rng : G_sub) {
+        for (auto v_it = first; v_it != last; ++v_it) {
+          auto edge_rng = *v_it;
+          for (auto edge : edge_rng) {
 
-          v_targets.resize(0);
+            // vertex_id_type u = source(G, edge);
+            //     TODO: getting "u" looks ugly, we could keep the src vertex in the edge range or
+            //     the edge, or create a nicer getter function for it
+            vertex_id_type u = v_it.index().get_global_index();
+            vertex_id_type v = target(G, edge);
 
-          auto neighbor_range = *v_it;
-          for (auto elt = neighbor_range.begin(); elt != neighbor_range.end(); ++elt) {
-
-            vertex_id_type v = target(G, *elt);
-
-            if (is_same_locality(this_locality_id, G, v)) {
+            auto loc_id = vertex_locality(G, v);
+            if (this_locality_id == loc_id) {
               // handle things locally
-              auto pr_iter = page_rank.get_local_iterator(v).local();
-              auto deg_iter = degrees.get_local_iterator(v).local();
-              *acc_iter += *pr_iter / *deg_iter;
+              accum_loc[u] += page_rank_loc[v] / degrees_loc[v];
             }
             else {
-              // send to elt's locality
-              v_targets.push_back(v);
-            }
-          }
-
-          // Store which incoming contributions are needed for this vertex
-          vertex_id_type current_v_idx = v_it.index().get_global_index();
-          if (!v_targets.empty()) {
-            for (auto v : v_targets) {
-              auto id = vertex_locality(G, v);
-              outgoing_packets[id].push_back(std::make_tuple(current_v_idx, v));
+              outgoing_packets[loc_id].push_back({u, v});
             }
           }
 
@@ -177,30 +177,25 @@ namespace nw::graph {
             send_request_packet(id, std::move(targets)).then(handle_response));
         }
 
-
-        if (!remote_results.empty()) {
-          // wait for all remote operations to finish
-          hpx::wait_all(remote_results);
-        }
+        // wait for all remote operations to finish
+        hpx::wait_all(remote_results);
 
         // (local) accumulated result is now fully computed
         // update the local page rank
         Real local_error = 0.0;
 
-        auto pr_iter = page_rank.get_local_iterator(first_index).local();
-        acc_iter = accumulated_contributions.get_local_iterator(first_index).local();
 
         // vertex_id_type i = first_index;
 
-        for (auto v_it = first; v_it != last; ++v_it, ++pr_iter, ++acc_iter) {
-          Real z = *acc_iter;
+        for (auto v_it = first; v_it != last; ++v_it) {
+          vertex_id_type u = v_it.index().get_global_index();
 
-          // std::cout << "Node " << i++ << " : " << z << std::endl;
-
-          auto old_rank = *pr_iter;
-          *pr_iter = base_score + damping_factor * z;
-          local_error += fabs(*pr_iter - old_rank);
-          *acc_iter = 0.0;
+          Real old_rank = page_rank_loc[u];
+          Real new_rank = base_score + damping_factor * accum_loc[u];
+          
+          page_rank_loc[u] = new_rank;
+          local_error += fabs(new_rank - old_rank);
+          accum_loc[u] = 0.0;
         }
 
         return local_error;
@@ -239,6 +234,7 @@ namespace nw::graph {
 
     for (size_t iter = 0; iter < max_iters; ++iter) {
 
+      std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
       std::cout << "----- Iteration " << iter << " ----- " << std::endl;
 
       // for (auto i = 0; i < G.size(); ++i) {
@@ -254,6 +250,10 @@ namespace nw::graph {
         errors.begin(), errors.end(), Real(0.0), [](Real count, Real curr) { return count + curr; },
         [](auto&& f) { return f.get(); });
 
+      std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
+      std::chrono::duration<double> elapsed_seconds = end_time - start_time;
+      std::cout << "Iteration " << iter << " completed in " << elapsed_seconds.count()
+                << " seconds with error " << error << std::endl;
       if (error < threshold)
         break;
     }
