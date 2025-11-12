@@ -547,7 +547,7 @@ void remove_self_loops(edge_list_t& el) {
 
 
 template <degree_enumerable_graph Graph, class ExecutionPolicy = default_execution_policy>
-auto degrees(const Graph& graph, ExecutionPolicy&& policy = {}) {
+auto degrees(const Graph& graph, ExecutionPolicy&& policy = ExecutionPolicy()) {
   std::vector<vertex_id_t<Graph>> degree_v(num_vertices(graph));
 #if NWGRAPH_HAVE_TBB
   tbb::parallel_for(tbb::blocked_range<std::uint64_t>(0ul, degree_v.size()), [&](auto&& r) {
@@ -565,8 +565,9 @@ auto degrees(const Graph& graph, ExecutionPolicy&& policy = {}) {
 
 
 template <int d_idx = 0, edge_list_graph edge_list_t, class ExecutionPolicy = default_execution_policy>
-requires(is_unipartite<typename edge_list_t::unipartite_graph_base>::value) auto degrees(
-    edge_list_t& el, ExecutionPolicy&& policy = {}) requires(!degree_enumerable_graph<edge_list_t>) {
+requires(is_unipartite<typename edge_list_t::unipartite_graph_base>::value) auto degrees(edge_list_t& el, ExecutionPolicy&& policy = ExecutionPolicy())
+  requires(!degree_enumerable_graph<edge_list_t>)
+{
 
   size_t d_size = 0;
   if constexpr (is_unipartite<typename edge_list_t::unipartite_graph_base>::value) {

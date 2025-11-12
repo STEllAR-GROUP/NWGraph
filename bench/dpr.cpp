@@ -116,9 +116,7 @@ int hpx_main(int argc, char* argv[]) {
 
   for (auto&& file : files) {
 
-
-    serialize_adj(file);
-    auto graph = partitioned_deserialize_adj(file);
+    partitioned_adjacency graph = load_partitioned_adjacency_graph(file);
 
     using vertex_id_type = typename decltype(graph)::vertex_id_type;
 

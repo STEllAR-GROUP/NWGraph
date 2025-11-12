@@ -51,6 +51,8 @@ static constexpr char USAGE[] =
 #include "nwgraph/algorithms/partitioned_bfs_1.hpp"
 #include "nwgraph/partitioned_adjacency.hpp"
 #include <nwgraph/partitioned_build.hpp>
+#include "nwgraph/algorithms/partitioned_util.hpp"
+#include <nwgraph/util/partitioned_serialize.hpp>
 
 #include <hpx/include/partitioned_vector.hpp>
 
@@ -90,25 +92,7 @@ int hpx_main(int argc, char* argv[]) {
                                                       : hpx::get_num_localities(hpx::launch::sync);
   long batchsize = args["--batchsize"].asLong() ? args["--batchsize"].asLong() : 10000;
 
-  auto aos_a = load_binary_graph<nw::graph::directedness::directed>(file);
-
-  if (verbose) {
-    aos_a.stream_stats();
-  }
-
-  auto loc_graph = build_adjacency<1>(aos_a);
-  auto gx = build_adjacency<0>(aos_a);
-
-  auto cvert_sizes = partitioned_vertex_sizes(num_partitions, num_vertices(aos_a));
-  auto cedge_sizes = partitioned_edge_sizes(loc_graph, cvert_sizes);
-
-  // free non-needed memory
-  aos_a = edge_list<nw::graph::directedness::directed>{};
-
-  auto graph = distribute_compressed<partitioned_adjacency<1>>(loc_graph, std::move(cvert_sizes), std::move(cedge_sizes));
-
-  // free non-needed memory
-  loc_graph = adjacency<1>{};
+  auto graph = load_partitioned_adjacency_graph(file);
 
   if (verbose) {
     graph.stream_stats();
@@ -183,7 +167,10 @@ int hpx_main(int argc, char* argv[]) {
           });
 
         if (verify) {
-          BFSVerifier(graph, gx, source, parents);
+          auto aos_a = load_binary_graph<nw::graph::directedness::directed>(file);
+          auto loc_graph = build_adjacency<1>(aos_a);
+          auto gx = build_adjacency<0>(aos_a);
+          BFSVerifier(loc_graph, gx, source, parents);
         }
 
         times.append(file, id, thread, time, source);

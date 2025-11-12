@@ -1,3 +1,10 @@
+#ifndef NW_GRAPH_PARTITIONED_SERIALIZE_HPP
+#define NW_GRAPH_PARTITIONED_SERIALIZE_HPP
+
+#ifndef NWGRAPH_HAVE_HPX
+#error "This file requires using HPX as a backend for NWGraph"
+#endif
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -116,7 +123,7 @@ namespace nw::graph {
       void write_header() {
         // We only write the header once we have written all data, to avoid
         // attempting to read incomplete files.
-        std::ofstream f(output_file_, std::ios::binary);
+        std::fstream f(output_file_, std::ios::binary | std::ios::in | std::ios::out);
         f.write(magic_, sizeof(magic_));
         f.write(reinterpret_cast<const char*>(&n_vertices_), sizeof(n_vertices_));
         f.write(reinterpret_cast<const char*>(&n_edges_), sizeof(n_edges_));
@@ -185,11 +192,18 @@ namespace nw::graph {
 
     std::string file_name = detail::get_adj_filename(mtx_file);
 
-    // if (std::filesystem::exists(file_name)) {
-    //   std::cout << "Adjacency file already exists: " << file_name << ". Skipping serialization."
-    //             << std::endl;
-    //   return file_name;
-    // }
+    if (std::filesystem::exists(file_name)) {
+      std::cout << "Adjacency file already exists, ";
+      // See if magic number matches
+      std::ifstream f(file_name);
+      char magic[30];
+      f.read(magic, sizeof(magic));
+      if (strncmp(magic, "NWGRAPH ADJACENCY BINARY FILE", sizeof(magic)) == 0) {
+        std::cout << "skipping serialization." << std::endl;
+        return file_name;
+      }
+      std::cout << "but is invalid, overwriting." << std::endl;
+    }
 
     // Get matrix size
     std::ifstream in_stream(mtx_file);
@@ -271,7 +285,7 @@ namespace nw::graph {
     public:
       std::pair<std::vector<id_t>, std::vector<vertex_id_t>> read_part(id_t begin_idx,
                                                                        id_t end_idx) {
-        assert(begin_idx <= end_idx && end_idx <= n_vertices_);
+        assert(begin_idx <= end_idx && end_idx <= n_vertices_ + 1);
         std::ifstream f(input_file_, std::ios::binary | std::ios::in);
         // Read indices
         std::vector<id_t> indices(end_idx - begin_idx + 1);
@@ -383,3 +397,5 @@ namespace nw::graph {
 
 
 } // namespace nw::graph
+
+#endif // NW_GRAPH_PARTITIONED_SERIALIZE_HPP

@@ -34,6 +34,8 @@
 #include <tbb/global_control.h>
 #endif
 #if NWGRAPH_HAVE_HPX
+#include <nwgraph/util/partitioned_serialize.hpp>
+#include <nwgraph/partitioned_adjacency.hpp>
 #include <hpx/algorithm.hpp>
 #endif
 
@@ -139,8 +141,16 @@ edge_list<Directedness, Attributes...> load_binary_graph(std::string file) {
   return el;
 }
 
+//template <int idx, typename... Attributes>
+//partitioned_adjacency<idx, Attributes...> 
+auto load_partitioned_adjacency_graph(std::string mtx_file) {
+  nw::util::life_timer _(__func__);
+  std::string b_adj_file = partitioned_serialize_adj(mtx_file);
+  return partitioned_deserialize_adj(b_adj_file);
+}
+
 template <int Adj, class ExecutionPolicy = std::execution::parallel_unsequenced_policy, directedness Directedness, class... Attributes>
-adjacency<Adj, Attributes...> build_adjacency(edge_list<Directedness, Attributes...>& graph, bool sort_adjacency = false, ExecutionPolicy&& policy = {}) {
+adjacency<Adj, Attributes...> build_adjacency(edge_list<Directedness, Attributes...>& graph, bool sort_adjacency = false, ExecutionPolicy&& policy = ExecutionPolicy()) {
   nw::util::life_timer _("build adjacency");
   return {graph, sort_adjacency, policy};
 }

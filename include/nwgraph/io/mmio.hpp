@@ -160,7 +160,7 @@ void mm_fill(
 
   for (size_t i = 0; i < nNonzeros; ++i) {
     size_t d0, d1;
-    double d2;
+    double d2 = 0.0;
 
     if (pattern) {
       inputStream >> d0 >> d1;

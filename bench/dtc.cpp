@@ -68,6 +68,7 @@ static constexpr char USAGE[] =
 
 #include <hpx/include/partitioned_vector.hpp>
 #include <nwgraph/partitioned_build.hpp>
+#include <nwgraph/util/partitioned_serialize.hpp>
 
 using unsigned_int = unsigned int;
 HPX_REGISTER_PARTITIONED_VECTOR(unsigned_int)
@@ -234,6 +235,9 @@ void run_bench(int argc, char* argv[]) {
     std::cout << "processing " << file << "\n";
 
     auto el_a = load_binary_graph<nw::graph::directedness::undirected>(file);
+
+    partitioned_adjacency G = load_partitioned_adjacency_graph(file);
+
     auto degree = degrees(el_a);
 
     // Run and time relabeling. This operates directly on the incoming edgelist.

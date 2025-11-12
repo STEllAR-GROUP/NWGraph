@@ -429,7 +429,7 @@ public:    // fixme
   * Sort each neighbor list.
   */
   template <class ExecutionPolicy = std::execution::parallel_unsequenced_policy>
-  void sort_to_be_indexed(ExecutionPolicy&& ex_policy = {}) {
+  void sort_to_be_indexed(ExecutionPolicy&& ex_policy = ExecutionPolicy()) {
     auto s = std::get<0>(to_be_indexed_).begin();
 
     for (size_t i = 0, e = indices_.size() - 1; i < e; ++i) {

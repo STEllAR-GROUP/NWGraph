@@ -178,6 +178,116 @@ namespace nw::graph {
     return degrees;
   }
 
+
+
+
+
+
+
+
+
+
+
+    namespace detail {
+    struct avg_degree_per_partition
+      : hpx::parallel::detail::algorithm<avg_degree_per_partition, double> {
+
+      constexpr avg_degree_per_partition() noexcept
+        : hpx::parallel::detail::algorithm<avg_degree_per_partition, double>(
+            "avg_degree_per_partition") {}
+
+
+      template <typename ExPolicy, typename Graph>
+      static double sequential(ExPolicy&& policy, Graph G, const size_t first_index,
+                               const size_t last_index) {
+
+        auto first = G.begin() + first_index;
+        auto last = G.begin() + last_index;
+
+        double count = 0;
+        double part_size = last_index - first_index;
+
+        // for each v in G do
+        for (auto v_it = first; v_it != last; ++v_it) {
+          count += v_it->size();
+        }
+
+        return count / part_size;
+      }
+
+      template <typename ExPolicy, typename Graph>
+      static float parallel(ExPolicy&& policy, Graph G, const size_t first_index,
+                            const size_t last_index) {
+        // boop
+        return 0;
+      }
+    };
+  } // namespace detail
+
+
+    template <adjacency_list_graph Graph>
+    std::vector<double> partitioned_avg_degree_per_partition(Graph& G) {
+      
+        auto results = partitioned_algorithm<detail::avg_degree_per_partition>(hpx::execution::seq, G);
+      
+      // unpack futures
+      std::vector<double> degrees;
+      for (auto&& f : results) {
+        degrees.push_back(f.get());
+      }
+      
+      return degrees;
+    }
+
+
+    namespace detail {
+      struct avg_remote_degree_per_partition
+        : hpx::parallel::detail::algorithm<avg_remote_degree_per_partition, double> {
+        constexpr avg_remote_degree_per_partition() noexcept
+          : hpx::parallel::detail::algorithm<avg_remote_degree_per_partition, double>(
+              "avg_remote_degree_per_partition") {}
+
+        template <typename ExPolicy, typename Graph>
+        static double sequential(ExPolicy&& policy, Graph G, const size_t first_index,
+                                 const size_t last_index) {
+          hpx::id_type this_locality_id = hpx::find_here();
+          auto first = G.begin() + first_index;
+          auto last = G.begin() + last_index;
+          double count = 0;
+          double part_size = last_index - first_index;
+          // for each v in G do
+          for (auto v_it = first; v_it != last; ++v_it) {
+            for (auto&& neighbor : *v_it) {
+              auto v = target(G, neighbor);
+              auto v_loc_id = vertex_locality(G, v);
+              if (v_loc_id != this_locality_id) {
+                count++;
+              }
+            }
+          }
+          return count / part_size;
+        }
+
+        template <typename ExPolicy, typename Graph>
+        static float parallel(ExPolicy&& policy, Graph G, const size_t first_index,
+                              const size_t last_index) {
+          // boop
+          return 0;
+        }
+      };
+    } // namespace detail
+
+    template <adjacency_list_graph Graph>
+    std::vector<double> partitioned_avg_remote_degree_per_partition(Graph& G) {
+      auto results = partitioned_algorithm<detail::avg_remote_degree_per_partition>(hpx::execution::seq, G);
+      // unpack futures
+      std::vector<double> degrees;
+      for (auto&& f : results) {
+        degrees.push_back(f.get());
+      }
+      return degrees;
+    }
+
 } // namespace nw::graph
 
 #endif // NW_GRAPH_PARTITIONED_UTIL_HPP
