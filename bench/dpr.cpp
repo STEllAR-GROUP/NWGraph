@@ -46,6 +46,7 @@ static constexpr const char USAGE[] =
 #include "nwgraph/algorithms/partitioned_page_rank_1.hpp"
 #include "nwgraph/algorithms/partitioned_page_rank_2.hpp"
 #include "nwgraph/algorithms/partitioned_page_rank_3.hpp"
+#include "nwgraph/algorithms/partitioned_page_rank_4.hpp"
 #include "nwgraph/algorithms/partitioned_util.hpp"
 #include "nwgraph/experimental/algorithms/page_rank.hpp"
 #include "nwgraph/partitioned_adjacency.hpp"
@@ -153,6 +154,10 @@ int hpx_main(int argc, char* argv[]) {
                 break;
               case 3:
                 partitioned_page_rank_3(graph, p_degrees, p_rankings, 0.85f, tolerance,
+                                        batchsize, max_iters);
+                break;
+              case 4: 
+                  partitioned_page_rank_4(graph, p_degrees, p_rankings, 0.85f, tolerance,
                                         batchsize, max_iters);
                 break;
               default:

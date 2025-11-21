@@ -8,7 +8,7 @@
 
 #include <hpx/include/partitioned_vector_predef.hpp>
 #include <memory>
-
+#include <vector>
 
 namespace nw::graph::util {
 
@@ -17,15 +17,22 @@ namespace nw::graph::util {
   // using the global indexes. It should also be able to answer whether an index belongs
   // to it quite quickly.
 
-  template <typename T, typename Data>
+  template <typename T>
   class partitioned_vector_local_partition_view {
 
-    using partitioned_vector_server = hpx::server::partitioned_vector<T, Data>;
+    friend class hpx::partitioned_vector<T>;
 
+    // Useful to keep a referece to the global (parent) partitioned vector
+    hpx::partitioned_vector<T>& global_ref_; 
+
+    // I am a stubborn person
+    using partitioned_vector_server = decltype(std::declval<hpx::partitioned_vector<T>>().partitions()[0].local_data_)::element_type;
+
+    // Could alternatively store direct reference to internal Data;
     std::shared_ptr<partitioned_vector_server> data_;
 
-    // or, could store direct reference to internal Data
-    // Data& data_;
+
+
 
     // Global index of the first element in this partition
     std::size_t first_;
@@ -37,8 +44,14 @@ namespace nw::graph::util {
     }
 
   public:
-    partitioned_vector_local_partition_view(hpx::partitioned_vector<T, Data> const& pv,
-                                            std::size_t partnum) {
+    using value_type = T;
+    using reference = T&;
+    using const_reference = T const&;
+
+    partitioned_vector_local_partition_view(hpx::partitioned_vector<T>& pv,
+                                            std::size_t partnum) 
+    : global_ref_(pv)
+    {
       HPX_ASSERT(partnum < pv.partitions().size());
       auto& partition = pv.partitions()[partnum];
       first_ = partition.first_;
@@ -68,12 +81,22 @@ namespace nw::graph::util {
 
 
     /* Iteration methods*/
+    // TODO: maybe return Data::iterator instead?
     T* begin() { return data_->get_data().data(); }
     T const* begin() const { return data_->get_data().data(); }
     T* end() { return data_->get_data().data() + size_; }
     T const* end() const { return data_->get_data().data() + size_; }
 
+    T* iter_from_global_index(std::size_t global_idx) {
+      std::size_t local_idx = local_index_from_global(global_idx);
+      return data_->get_data().data() + local_idx;
+    }
+
     std::size_t size() const { return size_; }
+    std::size_t first_index() const { return first_; }
+    std::size_t last_index() const { return first_ + size_; }
+
+    hpx::partitioned_vector<T> const& global_ref() const { return global_ref_; }
   };
 
 } // namespace nw::graph::util
