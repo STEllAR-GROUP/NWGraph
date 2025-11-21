@@ -57,6 +57,14 @@ namespace nw::graph {
     }
 
     template <typename Graph, typename Vertex>
+    std::size_t vertex_partition_num(Graph const& G, Vertex v) {
+      // TODO: Find a way to do this without breaking encapsulation
+      // These partition IDs are kinda internal to the underlying hpx::partitioned_vector
+      // And we cannot necessarily assume that the Vertex type can directly index into it
+      return G.indices_.get_partition(std::size_t(v));
+    }
+
+    template <typename Graph, typename Vertex>
     bool is_same_locality(std::uint32_t this_locality_id, Graph const& G, Vertex v) {
       return this_locality_id == hpx::naming::get_locality_id_from_id(vertex_locality(G, v));
     }

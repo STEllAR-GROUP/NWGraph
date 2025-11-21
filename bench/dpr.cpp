@@ -31,7 +31,7 @@ static constexpr const char USAGE[] =
       -d, --debug               run in debug mode
       -v, --verify              verify results
       -V, --verbose             run in verbose mode
-      -p, --partitions PARTS    number of graph partitions to create [default: 1]
+      -p, --partitions PARTS    number of graph partitions to create
       -b, --batchsize SIZE    number asynchronous operations to batch [default: 10000]
 )";
 
@@ -103,7 +103,7 @@ int hpx_main(int argc, char* argv[]) {
   long trials = args["-n"].asLong();
   long max_iters = args["-i"].asLong();
   float tolerance = std::stof(args["-t"].asString());
-  long num_partitions = args["--partitions"].asLong() ? args["--partitions"].asLong()
+  long num_partitions = args.contains("--partitions") ? args["--partitions"].asLong()
                                                       : hpx::get_num_localities(hpx::launch::sync);
   long batchsize = args["--batchsize"].asLong() ? args["--batchsize"].asLong() : 10000;
 

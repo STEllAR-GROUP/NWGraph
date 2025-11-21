@@ -41,22 +41,44 @@ namespace nw::graph {
 
   namespace detail {
 
+    // TODO: Where do these go?
+    template <typename T>
+    using local_partition_view =
+      typename nw::graph::util::partitioned_vector_local_partition_view<T>;
+
+    template <typename T>
+    static auto to_local_view(hpx::partitioned_vector<T>& pv, std::size_t partnum) {
+      return local_partition_view<T>(pv, partnum);
+    }
+
+    template <int idx, typename... Attributes>
+    using local_adjacency_view = nw::graph::partitioned_adjacency_local_view<idx, Attributes...>;
+
+    template <int idx, typename... Attributes>
+    static auto to_local_view(nw::graph::partitioned_adjacency<idx, Attributes...>& G,
+                              std::size_t partnum) {
+      return local_adjacency_view<idx, Attributes...>(G, partnum);
+    }
+
 
     template <typename Graph, typename Real>
     using remote_results_type = std::vector<std::tuple<typename Graph::vertex_id_type, Real>>;
 
     template <typename Graph, typename Real>
     static remote_results_type<Graph, Real> do_page_rank_packet_4(
-      std::vector<std::tuple<typename Graph::vertex_id_type, typename Graph::vertex_id_type>>&&
+      std::size_t part_num,
+      std::vector<std::tuple<typename Graph::vertex_id_type, typename Graph::vertex_id_type>> &&
         incoming_packet,
       hpx::partitioned_vector<Real> page_rank,
       hpx::partitioned_vector<typename Graph::vertex_id_type> degrees) {
 
+      // Construct the appropriate views for the remote action
+      auto pr_view = to_local_view(page_rank, part_num);
+      auto degrees_view = to_local_view(degrees, part_num);
+
       remote_results_type<Graph, Real> results;
       for (auto&& [v_dest, v_asked] : incoming_packet) {
-        auto deg_iter = degrees.get_local_iterator(v_asked).local();
-        auto pr_iter = page_rank.get_local_iterator(v_asked).local();
-        Real outgoing_contribution = *pr_iter / *deg_iter;
+        Real outgoing_contribution = pr_view[v_asked] / degrees_view[v_asked];
         results.push_back(std::make_tuple(v_dest, outgoing_contribution));
       }
       return results;
@@ -75,23 +97,6 @@ namespace nw::graph {
       // page rank driver for one of the partitions
       constexpr page_rank_4() noexcept
         : hpx::parallel::detail::algorithm<page_rank_4, Real>("page_rank_4") {}
-      template <typename T>
-      using local_partition_view =
-        typename nw::graph::util::partitioned_vector_local_partition_view<T>;
-
-      template <typename T>
-      static auto to_local_view(hpx::partitioned_vector<T>& pv, std::size_t partnum) {
-        return local_partition_view<T>(pv, partnum);
-      }
-
-      template <int idx, typename... Attributes>
-      using local_adjacency_view = nw::graph::partitioned_adjacency_local_view<idx, Attributes...>;
-
-      template <int idx, typename... Attributes>
-      static auto to_local_view(nw::graph::partitioned_adjacency<idx, Attributes...>& G,
-                                std::size_t partnum) {
-        return local_adjacency_view<idx, Attributes...>(G, partnum);
-      }
 
       template <typename ExPolicy, typename Graph>
       static Real sequential(ExPolicy&& policy, Graph G, const size_t first_index,
@@ -109,14 +114,13 @@ namespace nw::graph {
                         damping_factor, batchsize);
       }
 
-        template <typename ExPolicy, int G_idx, typename... G_Attributes>
-        static Real seq_impl(ExPolicy&& policy, local_adjacency_view<G_idx, G_Attributes...> G_loc,
-                             local_partition_view<Real> page_rank_loc,
-                             local_partition_view<Real> accum_loc,
-        local_partition_view<typename local_adjacency_view<G_idx, G_Attributes...> ::vertex_id_type>
+      template <typename ExPolicy, int G_idx, typename... G_Attributes>
+      static Real seq_impl(
+        ExPolicy&& policy, local_adjacency_view<G_idx, G_Attributes...> G_loc,
+        local_partition_view<Real> page_rank_loc, local_partition_view<Real> accum_loc,
+        local_partition_view<typename local_adjacency_view<G_idx, G_Attributes...>::vertex_id_type>
           degrees_loc,
-        Real base_score,
-        Real damping_factor, size_t batchsize) {
+        Real base_score, Real damping_factor, size_t batchsize) {
 
         // Compute one Page-Rank iteration
         // For each local node, do:
@@ -136,12 +140,17 @@ namespace nw::graph {
         using Graph = local_adjacency_view<G_idx, G_Attributes...>::graph_type;
         using loc_iter_t = local_adjacency_view<G_idx, G_Attributes...>::iterator;
 
-        auto send_remote_action = [&](auto&& id, auto&& targets) -> hpx::future<void>
+        auto send_remote_action = [&](std::size_t part_num, auto&& targets) -> hpx::future<void>
         {
-          // Is there benefit to hpx::unique_future?
           using action_t = page_rank_action_4<Graph, Real>;
-          auto f1 = hpx::async<action_t>(id, std::move(targets), page_rank_loc.global_ref(),
-                                         degrees_loc.global_ref());
+          // Get locality of target partition
+          // TODO: Find a nicer way to do this (make locality accessible from X_view, perhaps
+          // also make it support hpx::colocated)
+          hpx::id_type part_id = page_rank_loc.parent().partitions()[part_num].get_id();
+          hpx::id_type locality_id = hpx::naming::get_locality_from_id(part_id);
+          auto f1 =
+            hpx::async<action_t>(locality_id, part_num, std::move(targets), // TODO move
+                                 hpx::ref(page_rank_loc.parent()), hpx::ref(degrees_loc.parent()));
           return f1.then(
             [&](auto&& f)
             {
@@ -151,8 +160,8 @@ namespace nw::graph {
             });
         };
 
-
-        std::map<hpx::id_type, std::vector<std::tuple<vertex_id_type, vertex_id_type>>>
+        using part_num_t = std::size_t;
+        std::map<part_num_t, std::vector<std::tuple<vertex_id_type, vertex_id_type>>>
           outgoing_packets;
 
         std::vector<hpx::future<void>> remote_results;
@@ -165,7 +174,7 @@ namespace nw::graph {
 
           for (auto&& edge : edge_rng) {
 
-            //vertex_id_type v = target(G_loc, edge);
+            // vertex_id_type v = target(G_loc, edge);
             vertex_id_type v = std::get<0>(edge); // TODO: fullfill CPO concepts
 
             if (page_rank_loc.is_local_index(v)) {
@@ -174,23 +183,23 @@ namespace nw::graph {
               accum_loc[u] += page_rank_loc[v] / degrees_loc[v];
             }
             else {
-              auto loc_id = vertex_partition_id(G_loc.global_ref(), v);
-              outgoing_packets[loc_id].push_back({u, v});
+              auto part_num = vertex_partition_num(G_loc.parent(), v);
+              outgoing_packets[part_num].push_back({u, v});
             }
           }
 
-          for (auto&& [id, targets] : outgoing_packets) {
+          for (auto&& [part_num, targets] : outgoing_packets) {
             if (targets.size() > batchsize) {
-              remote_results.emplace_back(send_remote_action(id, std::move(targets)));
+              remote_results.emplace_back(send_remote_action(part_num, std::move(targets)));
               targets = {};
             }
           }
         }
 
         // send any remaining requests
-        for (auto&& [id, targets] : outgoing_packets) {
+        for (auto&& [part_num, targets] : outgoing_packets) {
           if (!targets.empty()) {
-            remote_results.emplace_back(send_remote_action(id, std::move(targets)));
+            remote_results.emplace_back(send_remote_action(part_num, std::move(targets)));
           }
         }
 
