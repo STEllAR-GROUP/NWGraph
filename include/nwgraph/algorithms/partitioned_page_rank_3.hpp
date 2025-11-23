@@ -243,8 +243,8 @@ namespace nw::graph {
                                hpx::partitioned_vector<typename Graph::vertex_id_type>& degrees,
                                hpx::partitioned_vector<Real>& page_rank,
                                const Real damping_factor = 0.85, const Real threshold = 1.e-4,
-                               size_t batchsize = 10000,
-                               const size_t max_iters = std::numeric_limits<unsigned int>::max()) {
+                               const size_t max_iters = std::numeric_limits<unsigned int>::max(),
+                               size_t batchsize = 1000) {
 
     const Real init_score = 1.0 / G.size();
     const Real base_score = (1.0 - damping_factor) / G.size();

@@ -31,7 +31,7 @@ static constexpr const char USAGE[] =
       -d, --debug               run in debug mode
       -v, --verify              verify results
       -V, --verbose             run in verbose mode
-      -p, --partitions PARTS    number of graph partitions to create
+      -p, --partitions PARTS    number of graph partitions to create [default: 0]
       -b, --batchsize SIZE    number asynchronous operations to batch [default: 10000]
 )";
 
@@ -103,9 +103,9 @@ int hpx_main(int argc, char* argv[]) {
   long trials = args["-n"].asLong();
   long max_iters = args["-i"].asLong();
   float tolerance = std::stof(args["-t"].asString());
-  long num_partitions = args.contains("--partitions") ? args["--partitions"].asLong()
+  long num_partitions = args["--partitions"].asLong() ? args["--partitions"].asLong()
                                                       : hpx::get_num_localities(hpx::launch::sync);
-  long batchsize = args["--batchsize"].asLong() ? args["--batchsize"].asLong() : 10000;
+  long batchsize = args["--batchsize"].asLong();
 
   std::cout << "Running on " << num_partitions << " partitions\n";
 
@@ -153,12 +153,12 @@ int hpx_main(int argc, char* argv[]) {
                 partitioned_page_rank_2(graph, p_rankings, 0.85f, tolerance, max_iters);
                 break;
               case 3:
-                partitioned_page_rank_3(graph, p_degrees, p_rankings, 0.85f, tolerance,
-                                        batchsize, max_iters);
+                partitioned_page_rank_3(graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters,
+                                        batchsize);
                 break;
               case 4: 
-                  partitioned_page_rank_4(graph, p_degrees, p_rankings, 0.85f, tolerance,
-                                        batchsize, max_iters);
+                  partitioned_page_rank_4(graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters,
+                                        batchsize);
                 break;
               default:
                 std::cerr << "Unknown version id " << id << std::endl;
@@ -186,13 +186,18 @@ int hpx_main(int argc, char* argv[]) {
            std::vector<float> local_rankings(loc_graph.size());
            page_rank_v1(loc_graph, loc_degrees, local_rankings, 0.85f, tolerance, max_iters);
 
-          float err_threshold = 1e-2; // arbitrary
-          float max_err = 0;
+          const float rel_factor = 0.001;
+          bool mismatch = false;
           for (size_t i = 0; i < graph.size(); ++i) {
-            max_err = std::max(max_err, std::abs(p_rankings[i] - local_rankings[i]));
-          }
-          if (max_err > err_threshold) {
-            std::cerr << "Results do not match\n";
+            float x1 = p_rankings[i];
+            float x2 = local_rankings[i];
+            float greater = std::max(std::fabs(x1), std::fabs(x2));
+            float are_same = std::abs(x1 - x2) < rel_factor * greater;
+            if (!are_same) {
+              mismatch = true;
+              std::cerr << "Results do not match\n";
+              break;
+            }
           }
         }
       }
