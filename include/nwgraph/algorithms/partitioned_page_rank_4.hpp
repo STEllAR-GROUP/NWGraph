@@ -41,49 +41,34 @@ namespace nw::graph {
 
   namespace detail {
 
-    // TODO: Where do these go?
     template <typename T>
-    using local_partition_view =
-      typename nw::graph::util::partitioned_vector_local_partition_view<T>;
+    using local_pv_view = nw::graph::util::partitioned_vector_local_partition_view<T>;
 
-    template <typename T>
-    static auto to_local_view(hpx::partitioned_vector<T>& pv, std::size_t partnum) {
-      return local_partition_view<T>(pv, partnum);
-    }
-
-    template <int idx, typename... Attributes>
-    using local_adjacency_view = nw::graph::partitioned_adjacency_local_view<idx, Attributes...>;
-
-    template <int idx, typename... Attributes>
-    static auto to_local_view(nw::graph::partitioned_adjacency<idx, Attributes...>& G,
-                              std::size_t partnum) {
-      return local_adjacency_view<idx, Attributes...>(G, partnum);
-    }
+    template <int idx, typename index_type, typename vertex_id, typename... Attributes>
+    using local_adj_view =
+      nw::graph::partitioned_index_adjacency_local_view<idx, index_type, vertex_id, Attributes...>;
 
 
     template <typename Graph, typename Real>
     using remote_results_type = std::vector<std::tuple<typename Graph::vertex_id_type, Real>>;
 
-    template <typename Graph, typename Real>
+    template <typename Graph, typename Real, typename vertex_id_t = typename Graph::vertex_id_type>
     static remote_results_type<Graph, Real> do_page_rank_packet_4(
-      std::size_t part_num,
-      std::vector<std::tuple<typename Graph::vertex_id_type, typename Graph::vertex_id_type>>&&
-        incoming_packet,
-      hpx::partitioned_vector<Real> page_rank,
-      hpx::partitioned_vector<typename Graph::vertex_id_type> degrees) {
+      std::size_t part_num, std::vector<std::tuple<vertex_id_t, vertex_id_t>>&& incoming_packet,
+      hpx::partitioned_vector<Real> page_rank, hpx::partitioned_vector<vertex_id_t> degrees) {
       hpx::scoped_annotation _(__func__);
 
       // Construct the appropriate views for the remote action
-      auto pr_view = to_local_view(page_rank, part_num);
-      auto degrees_view = to_local_view(degrees, part_num);
+      local_pv_view pr_view(page_rank, part_num);
+      local_pv_view degrees_view(degrees, part_num);
 
       remote_results_type<Graph, Real> results;
       results.reserve(incoming_packet.size());
       for (auto&& [v_dest, v_asked] : incoming_packet) {
-        if (degrees_view[v_asked] == 0)
-          continue;
-        Real outgoing_contribution = pr_view[v_asked] / degrees_view[v_asked];
-        results.push_back(std::make_tuple(v_dest, outgoing_contribution));
+        if (degrees_view[v_asked] != 0) {
+          Real outgoing_contribution = pr_view[v_asked] / degrees_view[v_asked];
+          results.push_back(std::make_tuple(v_dest, outgoing_contribution));
+        }
       }
       return results;
     }
@@ -102,29 +87,27 @@ namespace nw::graph {
       constexpr page_rank_4() noexcept
         : hpx::parallel::detail::algorithm<page_rank_4, Real>("page_rank_4") {}
 
-      template <typename ExPolicy, typename Graph>
-      static Real sequential(ExPolicy&& policy, Graph G, const size_t first_index,
-                             const size_t last_index, hpx::partitioned_vector<Real> page_rank_pv,
+      template <typename ExPolicy, typename Graph, typename vertex_id_t = Graph::vertex_id_type>
+      static Real sequential(ExPolicy&& policy, Graph G, size_t first_index, size_t last_index,
+                             hpx::partitioned_vector<Real> page_rank_pv,
                              hpx::partitioned_vector<Real> accum_pv,
-                             hpx::partitioned_vector<typename Graph::vertex_id_type> degrees_pv,
-                             Real base_score, Real damping_factor, size_t batchsize) {
+                             hpx::partitioned_vector<vertex_id_t> degrees_pv, Real base_score,
+                             Real damping_factor, size_t batchsize) {
         // Convert to local views and call the main implementation
         std::size_t partnum = accum_pv.get_partition(first_index);
-        auto page_rank_loc = to_local_view(page_rank_pv, partnum);
-        auto degrees_loc = to_local_view(degrees_pv, partnum);
-        auto accum_loc = to_local_view(accum_pv, partnum);
-        auto G_loc = to_local_view(G, partnum);
+        local_pv_view page_rank_loc(page_rank_pv, partnum);
+        local_pv_view degrees_loc(degrees_pv, partnum);
+        local_pv_view accum_loc(accum_pv, partnum);
+        local_adj_view G_loc(G, partnum);
         return seq_impl(policy, G_loc, page_rank_loc, accum_loc, degrees_loc, base_score,
                         damping_factor, batchsize);
       }
 
-      template <typename ExPolicy, int G_idx, typename... G_Attributes>
-      static Real seq_impl(
-        ExPolicy&& policy, local_adjacency_view<G_idx, G_Attributes...> G_loc,
-        local_partition_view<Real> page_rank_loc, local_partition_view<Real> accum_loc,
-        local_partition_view<typename local_adjacency_view<G_idx, G_Attributes...>::vertex_id_type>
-          degrees_loc,
-        Real base_score, Real damping_factor, size_t batchsize) {
+      template <typename ExPolicy, typename LocGraph,
+                typename vertex_id_t = typename LocGraph::vertex_id_type>
+      static Real seq_impl(ExPolicy&& policy, LocGraph G_loc, local_pv_view<Real> page_rank_loc,
+                           local_pv_view<Real> accum_loc, local_pv_view<vertex_id_t> degrees_loc,
+                           Real base_score, Real damping_factor, size_t batchsize) {
         hpx::scoped_annotation _(__func__);
 
         // Compute one Page-Rank iteration
@@ -141,20 +124,23 @@ namespace nw::graph {
         // Lambda to request contributions from remote localities, and update the local page rank
         // once the contributions are received
 
-        using vertex_id_type = local_adjacency_view<G_idx, G_Attributes...>::vertex_id_type;
-        using Graph = local_adjacency_view<G_idx, G_Attributes...>::graph_type;
-        using loc_iter_t = local_adjacency_view<G_idx, G_Attributes...>::iterator;
+        using Graph = LocGraph::graph_type;
+        using loc_iter_t = LocGraph::iterator;
+
+        auto get_part_locality = [](auto& G_loc, std::size_t part_num) -> hpx::id_type
+        {
+          // TODO: Too intrusive, fix
+          hpx::id_type part_id = G_loc.parent().get_indices().partitions()[part_num].get_id();
+          return hpx::naming::get_locality_from_id(part_id);
+        };
 
         auto send_remote_action = [&](std::size_t part_num, auto&& targets) -> hpx::future<void>
         {
-          //hpx::scoped_annotation __("PR4:send_remote_action");
+          // hpx::scoped_annotation __("PR4:send_remote_action");
           using action_t = page_rank_action_4<Graph, Real>;
           // Get locality of target partition
-          // TODO: Find a nicer way to do this (make locality accessible from X_view, perhaps
-          // also make it support hpx::colocated)
-          hpx::id_type part_id = page_rank_loc.parent().partitions()[part_num].get_id();
-          hpx::id_type locality_id = hpx::naming::get_locality_from_id(part_id);
-     
+          hpx::id_type locality_id = get_part_locality(G_loc, part_num);
+
           auto f1 =
             hpx::async<action_t>(locality_id, part_num, std::move(targets),
                                  hpx::ref(page_rank_loc.parent()), hpx::ref(degrees_loc.parent()));
@@ -168,27 +154,23 @@ namespace nw::graph {
         };
 
         using part_num_t = std::size_t;
-        std::map<part_num_t, std::vector<std::tuple<vertex_id_type, vertex_id_type>>>
-          outgoing_packets;
+        std::map<part_num_t, std::vector<std::tuple<vertex_id_t, vertex_id_t>>> outgoing_packets;
 
         std::vector<hpx::future<void>> remote_results;
-        std::vector<std::tuple<vertex_id_type, vertex_id_type>> v_targets;
+        std::vector<std::tuple<vertex_id_t, vertex_id_t>> v_targets;
 
         {
           hpx::scoped_annotation __("gather contributions");
           for (loc_iter_t v_it = G_loc.begin(); v_it != G_loc.end(); ++v_it) {
             // for (auto&& edge_rng : G_loc) {
             auto edge_rng = *v_it;
-            vertex_id_type u = v_it.index();
+            vertex_id_t u = v_it.index();
 
             for (auto&& edge : edge_rng) {
 
-              // vertex_id_type v = target(G_loc, edge);
-              vertex_id_type v = std::get<0>(edge); // TODO: fullfill CPO concepts
+              vertex_id_t v = target(G_loc, edge);
 
-              if (page_rank_loc.is_local_index(v)) {
-                if (degrees_loc[v] == 0)
-                  continue;
+              if (page_rank_loc.is_local_index(v) && degrees_loc[v] != 0) {
                 std::atomic_ref(accum_loc[u]) += page_rank_loc[v] / degrees_loc[v];
               }
               else {
@@ -222,7 +204,7 @@ namespace nw::graph {
         {
           hpx::scoped_annotation __("update page rank");
           for (loc_iter_t v_it = G_loc.begin(); v_it != G_loc.end(); ++v_it) {
-            vertex_id_type u = v_it.index();
+            vertex_id_t u = v_it.index();
 
             Real old_rank = page_rank_loc[u];
             Real new_rank = base_score + damping_factor * accum_loc[u];

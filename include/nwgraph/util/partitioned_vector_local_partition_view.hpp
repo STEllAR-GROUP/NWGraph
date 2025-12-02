@@ -23,10 +23,12 @@ namespace nw::graph::util {
     friend class hpx::partitioned_vector<T>;
 
     // Useful to keep a referece to the global (parent) partitioned vector
-    hpx::partitioned_vector<T>& parent_; 
+    std::shared_ptr<hpx::partitioned_vector<T>> parent_;
 
     // I am a stubborn person
-    using partitioned_vector_server = decltype(std::declval<hpx::partitioned_vector<T>>().partitions()[0].local_data_)::element_type;
+    using partitioned_vector_server = decltype(std::declval<hpx::partitioned_vector<T>>()
+                                                 .partitions()[0]
+                                                 .local_data_)::element_type;
 
     // Could alternatively store direct reference to internal Data;
     std::shared_ptr<partitioned_vector_server> data_;
@@ -36,15 +38,15 @@ namespace nw::graph::util {
     std::size_t first_;
     std::size_t size_;
 
-    //friend class hpx::serialization::access;
+    // friend class hpx::serialization::access;
 
-    //void serialize(hpx::serialization::input_archive& ar, unsigned) {
-    //  ar >> parent_ >> first_ >> size_ >> data_;
-    //}
+    // void serialize(hpx::serialization::input_archive& ar, unsigned) {
+    //   ar >> parent_ >> first_ >> size_ >> data_;
+    // }
 
-    //void serialize(hpx::serialization::output_archive& ar, unsigned) const {
-    //  ar << parent_ << first_ << size_ << data_;
-    //}
+    // void serialize(hpx::serialization::output_archive& ar, unsigned) const {
+    //   ar << parent_ << first_ << size_ << data_;
+    // }
 
     std::size_t local_index_from_global(std::size_t global_idx) const {
       HPX_ASSERT(is_local_index(global_idx));
@@ -56,12 +58,10 @@ namespace nw::graph::util {
     using reference = T&;
     using const_reference = T const&;
 
-    //partitioned_vector_local_partition_view() = default;
+    // partitioned_vector_local_partition_view() = default;
 
-    partitioned_vector_local_partition_view(hpx::partitioned_vector<T>& pv,
-                                            std::size_t partnum) 
-    : parent_(pv)
-    {
+    partitioned_vector_local_partition_view(hpx::partitioned_vector<T>& pv, std::size_t partnum)
+      : parent_(&pv) {
       HPX_ASSERT(partnum < pv.partitions().size());
       auto& partition = pv.partitions()[partnum];
       first_ = partition.first_;
@@ -106,7 +106,7 @@ namespace nw::graph::util {
     std::size_t first_index() const { return first_; }
     std::size_t last_index() const { return first_ + size_; }
 
-    hpx::partitioned_vector<T>& parent() { return parent_; }
+    hpx::partitioned_vector<T>& parent() { return *parent_; }
   };
 
 } // namespace nw::graph::util

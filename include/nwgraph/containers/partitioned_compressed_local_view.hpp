@@ -41,8 +41,8 @@
 #include <vector>
 
 #include "nwgraph/containers/compressed.hpp"
-#include "nwgraph/util/partitioned_vector_local_partition_view.hpp"
 #include "nwgraph/containers/partitioned_soa_local_view.hpp"
+#include "nwgraph/util/partitioned_vector_local_partition_view.hpp"
 
 #include <hpx/algorithm.hpp>
 #include <hpx/include/partitioned_vector.hpp>
@@ -76,17 +76,19 @@ namespace nw::graph {
 
     partitioned_indexed_struct_of_arrays_local_view() = default;
 
-    partitioned_indexed_struct_of_arrays_local_view(partitioned_indexed_struct_of_arrays<index_t, Attributes...>& parent_soa,
-                                                    std::size_t parent_soa_partition)
-      : indices_(parent_soa.indices_, parent_soa_partition),
-        to_be_indexed_(parent_soa.to_be_indexed_, parent_soa_partition)
-    {
+    partitioned_indexed_struct_of_arrays_local_view(
+      partitioned_indexed_struct_of_arrays<index_t, Attributes...>& parent_soa,
+      std::size_t parent_soa_partition)
+      : indices_(parent_soa.indices_, parent_soa_partition)
+      , to_be_indexed_(parent_soa.to_be_indexed_, parent_soa_partition) {
       first_ = indices_.first_index();
       last_ = indices_.last_index();
     }
 
-    using const_outer_iterator = partitioned_indexed_local_view_outer_iterator<index_t, true, Attributes...>;
-    using outer_iterator = partitioned_indexed_local_view_outer_iterator<index_t, false, Attributes...>;
+    using const_outer_iterator =
+      partitioned_indexed_local_view_outer_iterator<index_t, true, Attributes...>;
+    using outer_iterator =
+      partitioned_indexed_local_view_outer_iterator<index_t, false, Attributes...>;
 
     using iterator = partitioned_indexed_local_view_outer_iterator<index_t, false, Attributes...>;
 
@@ -104,16 +106,16 @@ namespace nw::graph {
     using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
     // Remember, the local part of indices_ resides between first_ and last_ in global indexes
-    iterator begin() { return {indices_, to_be_indexed_, first_}; }
-    const_iterator begin() const { return {indices_, to_be_indexed_, first_}; }
-    const_iterator cbegin() const { return {indices_, to_be_indexed_, first_}; }
-    iterator end() { return {indices_, to_be_indexed_, last_}; }
-    const_iterator end() const { return {indices_, to_be_indexed_, last_}; }
-    const_iterator cend() const { return {indices_, to_be_indexed_, last_}; }
+    iterator begin() { return {&indices_, &to_be_indexed_, first_}; }
+    const_iterator begin() const { return {&indices_, &to_be_indexed_, first_}; }
+    const_iterator cbegin() const { return {&indices_, &to_be_indexed_, first_}; }
+    iterator end() { return {&indices_, &to_be_indexed_, last_}; }
+    const_iterator end() const { return {&indices_, &to_be_indexed_, last_}; }
+    const_iterator cend() const { return {&indices_, &to_be_indexed_, last_}; }
 
     /// Random access to the outer range (using global index).
-    sub_view operator[](index_t i) { return *iterator{indices_, to_be_indexed_, i}; }
-    const_sub_view operator[](index_t i) const { return *iterator{indices_, to_be_indexed_, i}; }
+    sub_view operator[](index_t i) { return *iterator{&indices_, &to_be_indexed_, i}; }
+    const_sub_view operator[](index_t i) const { return *iterator{&indices_, &to_be_indexed_, i}; }
 
     // TODO: Should we return local or global size here?
     index_t size() const { return indices_.size() - 1; }
@@ -135,13 +137,13 @@ namespace nw::graph {
     using const_sub_view = typename isoa_t::const_sub_view;
 
     // Even though local views would be cheap to copy, they store a shared pointer, so let's avoid
-    // storing copies of the views in the iterator itself, and instead store plain references.
+    // storing copies of the views in the iterator itself, and instead store plain pointers.
     using indices_t =
-      std::conditional_t<is_const, partitioned_vector_local_partition_view<index_t> const&,
-                         partitioned_vector_local_partition_view<index_t>&>;
+      std::conditional_t<is_const, partitioned_vector_local_partition_view<index_t> const*,
+                         partitioned_vector_local_partition_view<index_t>*>;
     using indexed_t =
-      std::conditional_t<is_const, partitioned_struct_of_arrays_local_view<Attributes...> const&,
-                         partitioned_struct_of_arrays_local_view<Attributes...>&>;
+      std::conditional_t<is_const, partitioned_struct_of_arrays_local_view<Attributes...> const*,
+                         partitioned_struct_of_arrays_local_view<Attributes...>*>;
 
     indices_t indices_;
     indexed_t indexed_;
@@ -161,7 +163,8 @@ namespace nw::graph {
       , indexed_(indexed)
       , i_(i) {}
 
-    partitioned_indexed_local_view_outer_iterator(partitioned_indexed_local_view_outer_iterator const&) = default;
+    partitioned_indexed_local_view_outer_iterator(
+      partitioned_indexed_local_view_outer_iterator const&) = default;
     partitioned_indexed_local_view_outer_iterator(
       partitioned_indexed_local_view_outer_iterator<index_t, false, Attributes...> const& rhs)
       requires(is_const)
@@ -171,8 +174,8 @@ namespace nw::graph {
 
     partitioned_indexed_local_view_outer_iterator&
     operator=(partitioned_indexed_local_view_outer_iterator const&) = default;
-    partitioned_indexed_local_view_outer_iterator&
-    operator=(partitioned_indexed_local_view_outer_iterator<index_t, false, Attributes...> const& rhs)
+    partitioned_indexed_local_view_outer_iterator& operator=(
+      partitioned_indexed_local_view_outer_iterator<index_t, false, Attributes...> const& rhs)
       requires(is_const)
     {
       indices_ = rhs.indices_;
@@ -226,55 +229,67 @@ namespace nw::graph {
       return i_ - b.i_;
     }
 
-    bool operator==(partitioned_indexed_local_view_outer_iterator const& b) const { return i_ == b.i_; }
-    bool operator!=(partitioned_indexed_local_view_outer_iterator const& b) const { return i_ != b.i_; }
-    bool operator<(partitioned_indexed_local_view_outer_iterator const& b) const { return i_ < b.i_; }
-    bool operator>(partitioned_indexed_local_view_outer_iterator const& b) const { return i_ > b.i_; }
-    bool operator<=(partitioned_indexed_local_view_outer_iterator const& b) const { return i_ <= b.i_; }
-    bool operator>=(partitioned_indexed_local_view_outer_iterator const& b) const { return i_ >= b.i_; }
+    bool operator==(partitioned_indexed_local_view_outer_iterator const& b) const {
+      return i_ == b.i_;
+    }
+    bool operator!=(partitioned_indexed_local_view_outer_iterator const& b) const {
+      return i_ != b.i_;
+    }
+    bool operator<(partitioned_indexed_local_view_outer_iterator const& b) const {
+      return i_ < b.i_;
+    }
+    bool operator>(partitioned_indexed_local_view_outer_iterator const& b) const {
+      return i_ > b.i_;
+    }
+    bool operator<=(partitioned_indexed_local_view_outer_iterator const& b) const {
+      return i_ <= b.i_;
+    }
+    bool operator>=(partitioned_indexed_local_view_outer_iterator const& b) const {
+      return i_ >= b.i_;
+    }
 
   private:
-    auto _indexed_current() const {
-      //assert(indexed_.is_local_index(indices_[i_]));
-      return indexed_.global_begin() + indices_[i_];
-    }
+    auto indexed_current(index_t i) const { return indexed_->global_begin() + (*indices_)[i]; }
 
     // The edge range is constructed from {indexed_[i_], indexed_[i_+1]}
     // When i_+1 is local, we can directly use indexed_[i_+1]
     // But for the last local edge range, i_+1 may not be local, so in that
     // case the last edge range is terminated by indexed_.end(), essentially
     // containing all remaining local edges.
-    auto _indexed_next() const {
+    auto indexed_next(index_t i) const {
       // If i+1 is the last local index, return the end of indexed_
-      if (i_ + 1 == indices_.last_index()) {
-        return indexed_.end();
-      } else {
-        //assert(indexed_.is_local_index(indices_[i_ + 1]));
-        return indexed_.global_begin() + indices_[i_ + 1];
+      if (i + 1 == indices_->last_index()) {
+        return indexed_->end();
+      }
+      else {
+        return indexed_->global_begin() + (*indices_)[i + 1];
       }
     }
 
   public:
     reference operator*() {
-        assert(indices_.is_local_index(i_)); 
-        return {_indexed_current(), _indexed_next()}; }
+      assert(indices_->is_local_index(i_));
+      return {indexed_current(i_), indexed_next(i_)};
+    }
     reference operator*() const {
-      assert(indices_.is_local_index(i_));
-        return {_indexed_current(), _indexed_next()}; 
+      assert(indices_->is_local_index(i_));
+      return {indexed_current(i_), indexed_next(i_)};
     }
 
     pointer operator->() { return {**this}; }
     pointer operator->() const { return {**this}; }
 
-    // reference operator[](index_t n) {
-    //   return {indexed_ + indices_[i_ + n], indexed_ + indices_[i_ + n + 1]};
-    // }
-    // reference operator[](index_t n) const {
-    //   return {indexed_ + indices_[i_ + n], indexed_ + indices_[i_ + n + 1]};
-    // }
+    reference operator[](index_t n) {
+      assert(indices_->is_local_index(i_ + n));
+      return {indexed_current(i_ + n), indexed_next(i_ + n)};
+    }
+    reference operator[](index_t n) const {
+      assert(indices_->is_local_index(i_ + n));
+      return {indexed_current(i_ + n), indexed_next(i_ + n)};
+    }
 
-    //auto index() { return indices_.iter_from_global_index(i_); }
-    //auto index() const { return indices_.iter_from_global_index(i_); }
+    // auto index() { return indices_.iter_from_global_index(i_); }
+    // auto index() const { return indices_.iter_from_global_index(i_); }
 
     index_t index() const { return i_; }; // Maybe this is more sensible
   };

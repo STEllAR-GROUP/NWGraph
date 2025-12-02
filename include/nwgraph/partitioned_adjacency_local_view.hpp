@@ -45,7 +45,7 @@ namespace nw::graph {
   public:
     using index_t = index_type;
     using vertex_id_type = vertex_id;
-    using num_vertices_type = std::array<size_t, 1>;
+    using num_vertices_type = size_t;
     using num_edges_type = index_t;
 
     using graph_type = partitioned_index_adjacency<idx, index_type, vertex_id, Attributes...>;
@@ -60,8 +60,8 @@ namespace nw::graph {
       : base(parent, partnum), parent_(parent) {}
 
 
-    num_vertices_type num_local_vertices() const { return {base::size()}; };
-    num_edges_type num_local_edges() const { return base::to_be_indexed_.size(); };
+    num_vertices_type num_vertices() const { return {base::size()}; };
+    num_edges_type num_edges() const { return base::to_be_indexed_.size(); };
 
     graph_type& parent() { return parent_; }
   };
@@ -169,7 +169,7 @@ namespace nw::graph {
   //    : bipartite_graph_base(indices.size() - 1, N1)
   //    , base(indices, to_be_indexed) {}
 
-  //  auto num_vertices() const { return vertex_cardinality; }
+    //auto num_vertices() const { return vertex_cardinality; }
   //  num_edges_type num_edges() const { return base::to_be_indexed_.size(); };
   //  /**
   //   * @brief Serialize the partitioned_index_adjacency into binary file.
@@ -220,23 +220,24 @@ namespace nw::graph {
   //// vertex_id_type, Attributes...>& g) {
   ////   return g.num_vertices();
   //// }
-  //// partitioned_index_adjacency num_vertices CPO
-  //template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id_type,
-  //          typename... Attributes>
-  //auto
-  //tag_invoke(const num_vertices_tag,
-  //           const partitioned_index_adjacency<idx, index_type, vertex_id_type, Attributes...>& g) {
-  //  return g.num_vertices()[0];
-  //}
-  //// partitioned_index_adjacency degree CPO
-  //template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id_type,
-  //          std::unsigned_integral lookup_type, typename... Attributes>
-  //auto
-  //tag_invoke(const degree_tag,
-  //           const partitioned_index_adjacency<idx, index_type, vertex_id_type, Attributes...>& g,
-  //           lookup_type i) {
-  //  return g[i].size();
-  //}
+  //// partitioned_index_adjacency_local_view num_vertices CPO
+  template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id_type,
+            typename... Attributes>
+  auto
+  tag_invoke(const num_vertices_tag,
+                  const partitioned_index_adjacency_local_view<idx, index_type, vertex_id_type,
+                                                               Attributes...>& g) {
+    return g.num_vertices();
+  }
+  // partitioned_index_adjacency_local_view degree CPO
+  template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id_type,
+            std::unsigned_integral lookup_type, typename... Attributes>
+  auto
+  tag_invoke(const degree_tag,
+    const partitioned_index_adjacency_local_view<idx, index_type, vertex_id_type, Attributes...>& g,
+             lookup_type i) {
+    return g[i].size();
+  }
   //// partitioned_index_adjacency degree CPO
   //template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id_type,
   //          typename... Attributes>
@@ -275,6 +276,26 @@ namespace nw::graph {
   //                                                        Attributes...>::sub_view& v) {
   //  return v.size();
   //}
+
+// Sanity check, concepts should be satisfied
+  template <typename G>
+  concept has_member_begin = requires(G g) {
+    { g.begin() } -> std::input_or_output_iterator;
+  };
+
+  template <typename G>
+  concept has_member_end = requires(G g) {
+    { g.end() } -> std::input_or_output_iterator;
+  };
+
+  static_assert(has_member_begin<partitioned_adjacency_local_view<0, int>>,
+                "partitioned_adjacency_local_view does not have begin() member function");
+    static_assert(has_member_end<partitioned_adjacency_local_view<0, int>>,
+                "partitioned_adjacency_local_view does not have end() member function");
+  static_assert(std::ranges::range<partitioned_adjacency_local_view<0, int>>,
+                "partitioned_adjacency_local_view does not satisfy range concept");
+    static_assert(adjacency_list_graph<partitioned_adjacency_local_view<0, int>>,
+                "partitioned_adjacency_local_view does not satisfy adjacency_list_graph concept");
 
 } // namespace nw::graph
 
