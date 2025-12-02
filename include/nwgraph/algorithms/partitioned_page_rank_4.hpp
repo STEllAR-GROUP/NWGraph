@@ -161,13 +161,12 @@ namespace nw::graph {
 
         {
           hpx::scoped_annotation __("gather contributions");
-          for (loc_iter_t v_it = G_loc.begin(); v_it != G_loc.end(); ++v_it) {
-            // for (auto&& edge_rng : G_loc) {
-            auto edge_rng = *v_it;
-            vertex_id_t u = v_it.index();
+
+          for (auto&& edge_rng : G_loc) {
 
             for (auto&& edge : edge_rng) {
 
+              vertex_id_t u = source(G_loc, edge);
               vertex_id_t v = target(G_loc, edge);
 
               if (page_rank_loc.is_local_index(v) && degrees_loc[v] != 0) {

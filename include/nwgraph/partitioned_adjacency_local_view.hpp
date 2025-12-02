@@ -22,6 +22,7 @@
 #include "nwgraph/partitioned_adjacency.hpp"
 #include "nwgraph/containers/partitioned_compressed.hpp"
 #include "nwgraph/containers/partitioned_soa_local_view.hpp"
+#include "nwgraph/util/tag_invoke.hpp"
 
 // #include "nwgraph/partitioned_build.hpp"
 
@@ -276,6 +277,25 @@ namespace nw::graph {
   //                                                        Attributes...>::sub_view& v) {
   //  return v.size();
   //}
+
+  
+  // New source/target CPOs
+  template <typename Edge, int idx, std::unsigned_integral index_type,
+            std::unsigned_integral vertex_id_type, typename... Attributes>
+  auto tag_invoke(
+    const source_tag,
+    const partitioned_index_adjacency_local_view<idx, index_type, vertex_id_type, Attributes...>& g,
+    Edge e) {
+    return std::get<0>(e);
+  }
+
+  template <typename Edge, int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id_type, typename... Attributes>
+  auto tag_invoke(const target_tag,
+                  const partitioned_index_adjacency_local_view<idx, index_type, vertex_id_type,
+                                                               Attributes...>& g, Edge e) {
+    return std::get<0>(std::get<1>(e));
+  }
+
 
 // Sanity check, concepts should be satisfied
   template <typename G>

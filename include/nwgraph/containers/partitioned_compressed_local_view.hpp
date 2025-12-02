@@ -43,6 +43,7 @@
 #include "nwgraph/containers/compressed.hpp"
 #include "nwgraph/containers/partitioned_soa_local_view.hpp"
 #include "nwgraph/util/partitioned_vector_local_partition_view.hpp"
+#include "nwgraph/util/constant_iterator.hpp"
 
 #include <hpx/algorithm.hpp>
 #include <hpx/include/partitioned_vector.hpp>
@@ -65,10 +66,17 @@ namespace nw::graph {
     partitioned_struct_of_arrays_local_view<Attributes...> to_be_indexed_;
 
   public:
-    using inner_iterator =
-      typename partitioned_struct_of_arrays_local_view<Attributes...>::iterator;
-    using const_inner_iterator =
-      typename partitioned_struct_of_arrays_local_view<Attributes...>::const_iterator;
+    template <typename T>
+    using constant_iterator = nw::graph::util::constant_iterator<T>;
+    // Modified to also store the source index
+    using inner_iterator = hpx::util::zip_iterator<
+      typename constant_iterator<index_t>,
+      typename partitioned_struct_of_arrays_local_view<Attributes...>::iterator>;
+
+    using const_inner_iterator = hpx::util::zip_iterator<
+      typename constant_iterator<index_t>,
+      typename partitioned_struct_of_arrays_local_view<Attributes...>::const_iterator>;
+
     using sub_view = nw::graph::splittable_range_adaptor<inner_iterator>;
     using const_sub_view = nw::graph::splittable_range_adaptor<const_inner_iterator>;
 
@@ -133,6 +141,8 @@ namespace nw::graph {
 
   private:
     using isoa_t = partitioned_indexed_struct_of_arrays_local_view<index_t, Attributes...>;
+    using constant_iterator = typename isoa_t::template constant_iterator<index_t>;
+    using inner_iterator = typename isoa_t::inner_iterator;
     using sub_view = typename isoa_t::sub_view;
     using const_sub_view = typename isoa_t::const_sub_view;
 
@@ -269,11 +279,17 @@ namespace nw::graph {
   public:
     reference operator*() {
       assert(indices_->is_local_index(i_));
-      return {indexed_current(i_), indexed_next(i_)};
+      constant_iterator c_it{i_};
+      inner_iterator start{c_it, indexed_current(i_)};
+      inner_iterator end{c_it, indexed_next(i_)};
+      return {start, end};
     }
     reference operator*() const {
       assert(indices_->is_local_index(i_));
-      return {indexed_current(i_), indexed_next(i_)};
+      constant_iterator c_it{i_};
+      inner_iterator start{c_it, indexed_current(i_)};
+      inner_iterator end{c_it, indexed_next(i_)};
+      return {start, end};
     }
 
     pointer operator->() { return {**this}; }
@@ -281,11 +297,17 @@ namespace nw::graph {
 
     reference operator[](index_t n) {
       assert(indices_->is_local_index(i_ + n));
-      return {indexed_current(i_ + n), indexed_next(i_ + n)};
+      constant_iterator c_it{i_+n};
+      inner_iterator start{c_it, indexed_current(i_ + n)};
+      inner_iterator end{c_it, indexed_next(i_ + n)};
+      return {start, end};
     }
     reference operator[](index_t n) const {
       assert(indices_->is_local_index(i_ + n));
-      return {indexed_current(i_ + n), indexed_next(i_ + n)};
+      constant_iterator c_it{i_ + n};
+      inner_iterator start{c_it, indexed_current(i_ + n)};
+      inner_iterator end{c_it, indexed_next(i_ + n)};
+      return {start, end};
     }
 
     // auto index() { return indices_.iter_from_global_index(i_); }
