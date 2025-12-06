@@ -154,67 +154,88 @@ namespace nw::graph {
         };
 
         using part_num_t = std::size_t;
-        std::map<part_num_t, std::vector<std::tuple<vertex_id_t, vertex_id_t>>> outgoing_packets;
+        using packet_t = std::vector<std::tuple<vertex_id_t, vertex_id_t>>;
+        safe_object<std::map<part_num_t, packet_t>> outgoing_packets;
 
-        std::vector<hpx::future<void>> remote_results;
+        using results_t = std::vector<hpx::future<void>>;
+        safe_object<results_t> remote_results;
+
         std::vector<std::tuple<vertex_id_t, vertex_id_t>> v_targets;
 
-        {
-          hpx::scoped_annotation __("gather contributions");
 
-          for (auto&& edge_rng : G_loc) {
+        // hpx::scoped_annotation __("gather contributions");
 
-            for (auto&& edge : edge_rng) {
+        hpx::for_each(hpx::execution::par, G_loc.begin(), G_loc.end(),
+                      [&](auto&& edge_rng)
+                      {
+                        auto* thd_outgoing_packets = &(outgoing_packets.get());
 
-              vertex_id_t u = source(G_loc, edge);
-              vertex_id_t v = target(G_loc, edge);
+                        for (auto&& edge : edge_rng) {
+                          vertex_id_t u = source(G_loc, edge);
+                          vertex_id_t v = target(G_loc, edge);
 
-              if (page_rank_loc.is_local_index(v) && degrees_loc[v] != 0) {
-                std::atomic_ref(accum_loc[u]) += page_rank_loc[v] / degrees_loc[v];
-              }
-              else {
-                auto part_num = vertex_partition_num(G_loc.parent(), v);
-                outgoing_packets[part_num].push_back({u, v});
+                          if (page_rank_loc.is_local_index(v)) {
+                            if (degrees_loc[v] != 0)
+                              std::atomic_ref(accum_loc[u]) += page_rank_loc[v] / degrees_loc[v];
+                          }
+                          else {
+                            auto part_num = vertex_partition_num(G_loc.parent(), v);
+                            (*thd_outgoing_packets)[part_num].push_back({u, v});
+                          }
+                        }
+
+                        for (auto& [part_num, targets] : *thd_outgoing_packets) {
+                          // If the hpx thread ever suspended, it could have migrated to another
+                          // thread, in which case it is no longer safe to use the thread-local
+                          // reference
+                          if (thd_outgoing_packets != &(outgoing_packets.get()))
+                            break;
+                          if (targets.size() > batchsize) {
+                            auto tmp = std::move(targets);
+                            targets = {};
+                            auto f = send_remote_action(part_num, std::move(tmp));
+                            remote_results.get().emplace_back(std::move(f));
+                          }
+                        }
+                      });
+
+        // send any remaining requests
+        outgoing_packets.reduce(
+          [&](auto&& thd_outgoing_packets)
+          {
+            for (auto& [part_num, targets] : thd_outgoing_packets) {
+              if (!targets.empty()) {
+                remote_results.get().emplace_back(send_remote_action(part_num, std::move(targets)));
               }
             }
+          });
 
-            for (auto& [part_num, targets] : outgoing_packets) {
-              if (targets.size() > batchsize) {
-                remote_results.emplace_back(send_remote_action(part_num, std::move(targets)));
-                targets = {};
-              }
-            }
-          }
-
-          // send any remaining requests
-          for (auto& [part_num, targets] : outgoing_packets) {
-            if (!targets.empty()) {
-              remote_results.emplace_back(send_remote_action(part_num, std::move(targets)));
-            }
-          }
-        }
 
         // wait for all remote operations to finish
-        hpx::wait_all(remote_results);
+        remote_results.reduce([](auto&& thd_remote_results) { hpx::wait_all(thd_remote_results); });
 
         // (local) accumulated result is now fully computed
         // update the local page rank
-        Real local_error = 0.0;
-        {
-          hpx::scoped_annotation __("update page rank");
-          for (loc_iter_t v_it = G_loc.begin(); v_it != G_loc.end(); ++v_it) {
-            vertex_id_t u = v_it.index();
+        // hpx::scoped_annotation __("update page rank");
+        Real error = 0.0;
 
-            Real old_rank = page_rank_loc[u];
-            Real new_rank = base_score + damping_factor * accum_loc[u];
+        hpx::experimental::for_loop(hpx::execution::par, G_loc.begin(), G_loc.end(),
+                                    hpx::experimental::reduction_plus(error),
+                                    [&](auto&& v_it, auto& local_error)
+                                    {
+                                      vertex_id_t u = v_it.index();
 
-            page_rank_loc[u] = new_rank;
-            local_error += fabs(new_rank - old_rank);
-            accum_loc[u] = 0.0;
-          }
-        }
+                                      Real old_rank = page_rank_loc[u];
+                                      Real new_rank = base_score + damping_factor * accum_loc[u];
 
-        return local_error;
+                                      page_rank_loc[u] = new_rank;
+                                      local_error += fabs(new_rank - old_rank);
+                                      accum_loc[u] = 0.0;
+                                    }
+
+        );
+
+        return error;
       }
 
 

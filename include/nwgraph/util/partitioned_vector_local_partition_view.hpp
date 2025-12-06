@@ -22,8 +22,8 @@ namespace nw::graph::util {
 
     friend class hpx::partitioned_vector<T>;
 
-    // Useful to keep a referece to the global (parent) partitioned vector
-    std::shared_ptr<hpx::partitioned_vector<T>> parent_;
+    // Useful to keep a (non-owning) referece to the global (parent) partitioned vector
+    hpx::partitioned_vector<T>* parent_ = nullptr;
 
     // I am a stubborn person
     using partitioned_vector_server = decltype(std::declval<hpx::partitioned_vector<T>>()
@@ -106,7 +106,10 @@ namespace nw::graph::util {
     std::size_t first_index() const { return first_; }
     std::size_t last_index() const { return first_ + size_; }
 
-    hpx::partitioned_vector<T>& parent() { return *parent_; }
+    hpx::partitioned_vector<T>& parent() {
+        assert(parent_);
+        return *parent_; 
+    }
   };
 
 } // namespace nw::graph::util

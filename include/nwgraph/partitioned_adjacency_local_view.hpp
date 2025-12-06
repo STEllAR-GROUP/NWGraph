@@ -41,8 +41,7 @@ namespace nw::graph {
       public partitioned_indexed_struct_of_arrays_local_view<index_type, vertex_id, Attributes...> {
     using base = partitioned_indexed_struct_of_arrays_local_view<index_type, vertex_id, Attributes...>;
 
-    //TODO: Make sure this doesn't do a deep copy
-    partitioned_index_adjacency<idx, index_type, vertex_id, Attributes...> parent_;
+    partitioned_index_adjacency<idx, index_type, vertex_id, Attributes...>* parent_ = nullptr;
   public:
     using index_t = index_type;
     using vertex_id_type = vertex_id;
@@ -58,13 +57,16 @@ namespace nw::graph {
     partitioned_index_adjacency_local_view(
       partitioned_index_adjacency<idx, index_type, vertex_id, Attributes...>& parent,
       std::size_t partnum)
-      : base(parent, partnum), parent_(parent) {}
+      : base(parent, partnum), parent_(&parent) {}
 
 
     num_vertices_type num_vertices() const { return {base::size()}; };
     num_edges_type num_edges() const { return base::to_be_indexed_.size(); };
 
-    graph_type& parent() { return parent_; }
+    graph_type& parent() { 
+        assert(parent_ != nullptr);
+        return *parent_; 
+    }
   };
 
   template <int idx, typename... Attributes>
