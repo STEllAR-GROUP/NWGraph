@@ -23,32 +23,12 @@
 #endif
 
 #include "nwgraph/adaptors/splittable_range_adaptor.hpp"
-#include "nwgraph/containers/partitioned_soa.hpp"
-#include "nwgraph/graph_base.hpp"
-#include "nwgraph/util/defaults.hpp"
-#include "nwgraph/util/proxysort.hpp"
-#include "nwgraph/util/util.hpp"
 
-#include <algorithm>
-#include <concepts>
-#include <iostream>
-#include <istream>
-#include <numeric>
-
-#include <execution>
-
-#include <tuple>
-#include <vector>
-
-#include "nwgraph/containers/compressed.hpp"
 #include "nwgraph/containers/partitioned_soa_local_view.hpp"
 #include "nwgraph/util/partitioned_vector_local_partition_view.hpp"
 #include "nwgraph/util/constant_iterator.hpp"
 
 #include <hpx/algorithm.hpp>
-#include <hpx/include/partitioned_vector.hpp>
-#include <hpx/include/runtime.hpp>
-#include <hpx/include/serialization.hpp>
 
 namespace nw::graph {
 
@@ -70,11 +50,11 @@ namespace nw::graph {
     using constant_iterator = nw::graph::util::constant_iterator<T>;
     // Modified to also store the source index
     using inner_iterator = hpx::util::zip_iterator<
-      typename constant_iterator<index_t>,
+      constant_iterator<index_t>,
       typename partitioned_struct_of_arrays_local_view<Attributes...>::iterator>;
 
     using const_inner_iterator = hpx::util::zip_iterator<
-      typename constant_iterator<index_t>,
+      constant_iterator<index_t>,
       typename partitioned_struct_of_arrays_local_view<Attributes...>::const_iterator>;
 
     using sub_view = nw::graph::splittable_range_adaptor<inner_iterator>;
@@ -100,15 +80,15 @@ namespace nw::graph {
 
     using iterator = partitioned_indexed_local_view_outer_iterator<index_t, false, Attributes...>;
 
-    using value_type = typename iterator::value_type;
-    using reference = typename iterator::reference;
+    using value_type = iterator::value_type;
+    using reference = iterator::reference;
     using size_type = std::size_t;
-    using difference_type = typename iterator::difference_type;
-    using pointer = typename iterator::pointer;
+    using difference_type = iterator::difference_type;
+    using pointer = iterator::pointer;
 
     using const_iterator = const_outer_iterator;
-    using const_reference = typename const_iterator::reference;
-    using const_pointer = typename const_iterator::pointer;
+    using const_reference = const_iterator::reference;
+    using const_pointer = const_iterator::pointer;
 
     using reverse_iterator = std::reverse_iterator<iterator>;
     using const_reverse_iterator = std::reverse_iterator<const_iterator>;
@@ -134,6 +114,11 @@ namespace nw::graph {
 
     auto const& get_indices() const { return indices_; }
     auto const& get_to_be_indexed() const { return to_be_indexed_; }
+
+    
+    bool is_local_index(index_t global_index) const {
+      return indices_.is_local_index(global_index);
+    }
   };
 
   template <typename index_t, bool is_const, typename... Attributes>
@@ -141,10 +126,10 @@ namespace nw::graph {
 
   private:
     using isoa_t = partitioned_indexed_struct_of_arrays_local_view<index_t, Attributes...>;
-    using constant_iterator = typename isoa_t::template constant_iterator<index_t>;
-    using inner_iterator = typename isoa_t::inner_iterator;
-    using sub_view = typename isoa_t::sub_view;
-    using const_sub_view = typename isoa_t::const_sub_view;
+    using constant_iterator = isoa_t::template constant_iterator<index_t>;
+    using inner_iterator = isoa_t::inner_iterator;
+    using sub_view = isoa_t::sub_view;
+    using const_sub_view = isoa_t::const_sub_view;
 
     // Even though local views would be cheap to copy, they store a shared pointer, so let's avoid
     // storing copies of the views in the iterator itself, and instead store plain pointers.

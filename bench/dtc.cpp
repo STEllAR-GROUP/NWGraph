@@ -35,7 +35,7 @@ static constexpr char USAGE[] =
       -d, --debug             run in debug mode
       -v, --verify            verify results
       -V, --verbose           run in verbose mode
-      -p, --partitions PARTS  number of graph partitions to create [default: 1]
+      -p, --partitions PARTS  number of graph partitions to create [default: 0]
       -b, --batchsize SIZE    number asynchronous operations to batch [default: 10000]
 )";
 
@@ -59,6 +59,7 @@ static constexpr char USAGE[] =
 #include "nwgraph/algorithms/partitioned_triangle_count_1.hpp"
 #include "nwgraph/algorithms/partitioned_triangle_count_2.hpp"
 #include "nwgraph/algorithms/partitioned_triangle_count_3.hpp"
+#include "nwgraph/algorithms/partitioned_triangle_count_4.hpp"
 #include "nwgraph/partitioned_adjacency.hpp"
 
 #include <date/date.h>
@@ -264,7 +265,17 @@ void run_bench(int argc, char* argv[]) {
     // undirectedness.
     auto&& [clean_time] = time_op([&] { clean<0>(el_a, succession); });
 
-    auto local_cel_a = build_adjacency<0>(el_a);
+    const bool sort_adjacency = true;
+    auto local_cel_a = build_adjacency<0>(el_a, sort_adjacency);
+
+    // If we're verifying then compute the number of triangles once for this
+    // graph.
+    size_t v_triangles = 0;
+    
+    if (verify) {
+      v_triangles = TCVerifier(local_cel_a);
+      std::cout << "verifier reports " << v_triangles << " triangles\n";
+    }
 
     auto cvert_sizes = partitioned_vertex_sizes(num_partitions, num_vertices(el_a));
     auto cedge_sizes = partitioned_edge_sizes(local_cel_a, cvert_sizes);
@@ -283,13 +294,7 @@ void run_bench(int argc, char* argv[]) {
     // cel_a.stream_indices();
     //}
 
-    // If we're verifying then compute the number of triangles once for this
-    // graph.
-    size_t v_triangles = 0;
-    if (verify) {
-      v_triangles = TCVerifier(cel_a);
-      std::cout << "verifier reports " << v_triangles << " triangles\n";
-    }
+
 
     json thread_log = {};
     size_t thread_ctr = 0;
@@ -327,6 +332,8 @@ void run_bench(int argc, char* argv[]) {
 
               case 4:
                 return partitioned_triangle_count_3(cel_a, batchsize);
+              case 5:
+                return partitioned_triangle_count_4(cel_a, batchsize);
 #if 0
               case 1:
                 return triangle_count_v1(cel_a);

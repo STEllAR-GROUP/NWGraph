@@ -274,7 +274,7 @@ namespace nw::graph {
 
       std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
       std::cout << "----- Iteration " << iter << " ----- " << std::endl;
-
+      
       // for (auto i = 0; i < G.size(); ++i) {
       //   std::cout << "Node " << i << " : " << page_rank[i] << std::endl;
       // }
