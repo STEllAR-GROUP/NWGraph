@@ -56,7 +56,8 @@ namespace nw::graph {
     static remote_results_type<Graph, Real> do_page_rank_packet_4(
       std::size_t part_num, std::vector<std::tuple<vertex_id_t, vertex_id_t>>&& incoming_packet,
       hpx::partitioned_vector<Real> page_rank, hpx::partitioned_vector<vertex_id_t> degrees) {
-      hpx::scoped_annotation _(__func__);
+
+      hpx::scoped_annotation ann_pr_handle_packet("PR_handle_packet");
 
       // Construct the appropriate views for the remote action
       local_pv_view pr_view(page_rank, part_num);
@@ -108,7 +109,7 @@ namespace nw::graph {
       static Real seq_impl(ExPolicy&& policy, LocGraph G_loc, local_pv_view<Real> page_rank_loc,
                            local_pv_view<Real> accum_loc, local_pv_view<vertex_id_t> degrees_loc,
                            Real base_score, Real damping_factor, size_t batchsize) {
-        hpx::scoped_annotation _(__func__);
+        hpx::scoped_annotation ann_pr_impl("PR_impl");
 
         // Compute one Page-Rank iteration
         // For each local node, do:
@@ -163,7 +164,8 @@ namespace nw::graph {
         std::vector<std::tuple<vertex_id_t, vertex_id_t>> v_targets;
 
 
-        // hpx::scoped_annotation __("gather contributions");
+        {
+          hpx::scoped_annotation ann_pr_for_each("PR_for_each");
 
         hpx::for_each(hpx::execution::par, G_loc.begin(), G_loc.end(),
                       [&](auto&& edge_rng)
@@ -199,6 +201,9 @@ namespace nw::graph {
                         }
                       });
 
+        }
+
+
         // send any remaining requests
         outgoing_packets.reduce(
           [&](auto&& thd_outgoing_packets)
@@ -212,28 +217,32 @@ namespace nw::graph {
 
 
         // wait for all remote operations to finish
-        remote_results.reduce([](auto&& thd_remote_results) { hpx::wait_all(thd_remote_results); });
+        {
+          hpx::scoped_annotation ann_pr_wait_all("PR_wait_all"); 
+          remote_results.reduce([](auto&& thd_remote_results) { hpx::wait_all(thd_remote_results); });
+        }
 
         // (local) accumulated result is now fully computed
         // update the local page rank
-        // hpx::scoped_annotation __("update page rank");
         Real error = 0.0;
 
-        hpx::experimental::for_loop(hpx::execution::par, G_loc.begin(), G_loc.end(),
-                                    hpx::experimental::reduction_plus(error),
-                                    [&](auto&& v_it, auto& local_error)
-                                    {
-                                      vertex_id_t u = v_it.index();
+        {
+          hpx::scoped_annotation ann_pr_update_pr("PR_update_pr");
 
-                                      Real old_rank = page_rank_loc[u];
-                                      Real new_rank = base_score + damping_factor * accum_loc[u];
+          hpx::experimental::for_loop(hpx::execution::par, G_loc.begin(), G_loc.end(),
+                                      hpx::experimental::reduction_plus(error),
+                                      [&](auto&& v_it, auto& local_error)
+                                      {
+                                        vertex_id_t u = v_it.index();
 
-                                      page_rank_loc[u] = new_rank;
-                                      local_error += fabs(new_rank - old_rank);
-                                      accum_loc[u] = 0.0;
-                                    }
+                                        Real old_rank = page_rank_loc[u];
+                                        Real new_rank = base_score + damping_factor * accum_loc[u];
 
-        );
+                                        page_rank_loc[u] = new_rank;
+                                        local_error += fabs(new_rank - old_rank);
+                                        accum_loc[u] = 0.0;
+                                      });
+        }
 
         return error;
       }
@@ -257,6 +266,8 @@ namespace nw::graph {
                                const size_t max_iters = std::numeric_limits<unsigned int>::max(),
                                size_t batchsize = 1000) {
 
+    hpx::scoped_annotation ann_pr("PR");
+
     auto sizes = G.indices_.get_partition_sizes();
 
     const Real init_score = 1.0 / G.size();
@@ -265,23 +276,20 @@ namespace nw::graph {
     // Initialize page ranks
     hpx::fill(hpx::execution::par_unseq, page_rank.begin(), page_rank.end(), init_score);
 
-    hpx::partitioned_vector<Real> accummulating_contributions(
+    hpx::partitioned_vector<Real> accumulating_contributions(
       G.indices_.size(), 0.0,
       hpx::explicit_container_layout(sizes, G.indices_.get_partition_localities()));
-    accummulating_contributions.register_as("accummulating_contributions");
+    accumulating_contributions.register_as("accumulating_contributions");
 
     for (size_t iter = 0; iter < max_iters; ++iter) {
 
+      hpx::scoped_annotation ann_pr_iteration("PR_iteration");
+
       std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
       std::cout << "----- Iteration " << iter << " ----- " << std::endl;
-      
-      // for (auto i = 0; i < G.size(); ++i) {
-      //   std::cout << "Node " << i << " : " << page_rank[i] << std::endl;
-      // }
-
 
       std::vector<hpx::future<Real>> errors = partitioned_algorithm<detail::page_rank_4<Real>>(
-        hpx::execution::seq, G, hpx::ref(page_rank), hpx::ref(accummulating_contributions),
+        hpx::execution::seq, G, hpx::ref(page_rank), hpx::ref(accumulating_contributions),
         hpx::ref(degrees), base_score, damping_factor, batchsize);
 
       // std::transform_reduce is undefined behavior, since it modifies the input futures

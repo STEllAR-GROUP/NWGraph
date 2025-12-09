@@ -54,13 +54,15 @@ namespace nw::graph {
       std::vector<std::tuple<std::vector<vertex_id_t>, std::vector<vertex_id_t>>> const&
         packets) {
 
+      hpx::scoped_annotation ann_tc_handle_packet("TC_handle_packet");
+
       local_adj_view G_loc(G, part_num);
 
       auto get_tgt = [&G_loc](auto&& e) { return target(G_loc, e); };
 
       size_t triangles = 0;
-      for (auto&& packet : packets) {
-        for (auto v : std::get<0>(packet)) {
+      for (auto& packet : packets) {
+        for (auto& v : std::get<0>(packet)) {
           auto& set1 = std::get<1>(packet);
           auto set2 = G_loc[v] | std::ranges::views ::transform(get_tgt);
           triangles +=
@@ -95,6 +97,8 @@ namespace nw::graph {
       template <typename LocGraph>
       static size_t seq_impl(LocGraph G_loc, size_t batchsize) {
 
+        hpx::scoped_annotation ann_tc_impl("TC_impl");
+
         using Graph = LocGraph::graph_type;
         using vertex_id_type = typename Graph::vertex_id_type;
         using target_list_t = std::vector<
@@ -103,15 +107,16 @@ namespace nw::graph {
 
         auto cmp = [&G_loc](auto&& a, auto&& b) { return target(G_loc, a) < target(G_loc, b); };
 
-        auto get_part_locality = [](auto& G_loc, std::size_t part_num) -> hpx::id_type
+        auto get_part_locality = [](auto& graph_loc, std::size_t part_num) -> hpx::id_type
         {
           // TODO: Too intrusive, fix
-          hpx::id_type part_id = G_loc.parent().get_indices().partitions()[part_num].get_id();
+          hpx::id_type part_id = graph_loc.parent().get_indices().partitions()[part_num].get_id();
           return hpx::naming::get_locality_from_id(part_id);
         };
 
         auto send_remote_action = [&](std::size_t part_num, auto&& targets) -> hpx::future<size_t>
         {
+          hpx::scoped_annotation ann_tc_send_remote("TC_send_remote");
           triangle_count_action_4<Graph> act;
           auto id = get_part_locality(G_loc, part_num);
           return hpx::async(act, id, hpx::ref(G_loc.parent()), part_num, std::move(targets));
@@ -124,6 +129,7 @@ namespace nw::graph {
 
         auto tc = [&](auto&& neighbor_range)
         {
+          hpx::scoped_annotation ann_tc_per_vertex("TC_per_vertex");
           size_t triangles = 0;
           std::vector<vertex_id_type> neighbors;
           std::map<std::size_t, std::vector<vertex_id_type>> target_vertices;
@@ -163,7 +169,11 @@ namespace nw::graph {
           }
           
         };
-        hpx::for_each(hpx::execution::par, G_loc.begin(), G_loc.end(), tc);
+
+        {
+          hpx::scoped_annotation ann_tc_main_loop("TC_main_loop");
+          hpx::for_each(hpx::execution::par, G_loc.begin(), G_loc.end(), tc);
+        }
 
         // Send any remaining messages
         remote_targets.reduce(
@@ -185,13 +195,16 @@ namespace nw::graph {
 
 
         // Now wait/accumulate all remote results
-        remote_results.reduce(
-          [&](auto&& thd_remote_results)
-          {
-            for (auto&& f : thd_remote_results) {
-              triangles += f.get();
-            }
-          });
+        {
+          hpx::scoped_annotation ann_tc_wait_for_results("TC_wait_for_results");
+          remote_results.reduce(
+            [&](auto&& thd_remote_results)
+            {
+              for (auto&& f : thd_remote_results) {
+                triangles += f.get();
+              }
+            });
+        }
 
         return triangles;
       }
@@ -215,6 +228,7 @@ namespace nw::graph {
 
   template <adjacency_list_graph Graph>
   size_t partitioned_triangle_count_4(Graph& G, size_t batchsize) {
+    hpx::scoped_annotation ann_tc("TC");
     auto counts =
       partitioned_algorithm<detail::triangle_count_4>(hpx::execution::seq, G, batchsize);
     return std::transform_reduce(
