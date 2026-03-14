@@ -65,32 +65,69 @@ using namespace nw::graph::bench;
 using namespace nw::graph;
 using namespace nw::util;
 
+namespace {
+
+constexpr float kVerificationRelTolerance = 0.001f;
+constexpr float kVerificationAbsTolerance = 1.0e-6f;
+
 template <typename T>
-void copy_to(std::vector<T>& local_src, hpx::partitioned_vector<T>& dest) {
-  auto const sizes = dest.get_partition_sizes();
-  auto const dest_partitions = sizes.size();
+std::vector<T> copy_from_partitioned_vector(hpx::partitioned_vector<T>& src) {
+  auto const sizes = src.get_partition_sizes();
+  auto const src_partitions = sizes.size();
   std::vector<std::size_t> const empty;
-  size_t offset = 0;
-  for (std::size_t i = 0; i != dest_partitions; ++i) {
-
-    auto size = sizes[i];
-
-    using vec_t = std::decay_t<decltype(local_src)>;
-    vec_t part_data(local_src.begin() + offset, local_src.begin() + offset + size);
-
-    dest.set_values(hpx::launch::sync, i, empty, HPX_MOVE(part_data));
-
-    offset += size;
+  std::vector<T> local_values;
+  local_values.reserve(src.size());
+  for (std::size_t part = 0; part != src_partitions; ++part) {
+    auto values = src.get_values(hpx::launch::sync, part, empty);
+    local_values.insert(local_values.end(), values.begin(), values.end());
   }
+  return local_values;
 }
 
-template <typename Vector>
-void print_n_ranks(const Vector& rankings, size_t n) {
-  auto perm = proxysort<size_t>(rankings, std::greater<float>());
-  for (size_t i = 0; i < 10; ++i) {
-    std::cout << std::to_string(perm[i]) + ": " << std::to_string(rankings[perm[i]]) << std::endl;
+bool verify_partitioned_pagerank(
+  const std::string& file, hpx::partitioned_vector<float>& distributed_rankings, float tolerance,
+  long max_iters) {
+  auto edge_list = load_binary_graph<nw::graph::directedness::directed>(file);
+  auto local_graph = build_adjacency<1>(edge_list);
+  auto local_degrees = build_degrees(local_graph);
+  std::vector<float> local_rankings(local_graph.size());
+
+  {
+    nw::util::life_timer _("local verification pagerank");
+    page_rank_v1(local_graph, local_degrees, local_rankings, 0.85f, tolerance, max_iters);
   }
+
+  auto gathered_rankings = copy_from_partitioned_vector(distributed_rankings);
+  float max_abs_error = 0.0f;
+  float max_rel_error = 0.0f;
+
+  for (std::size_t i = 0; i < gathered_rankings.size(); ++i) {
+    float distributed = gathered_rankings[i];
+    float reference = local_rankings[i];
+    float greater = std::max(std::fabs(distributed), std::fabs(reference));
+    float abs_error = std::fabs(distributed - reference);
+    float rel_error = greater > 0.0f ? abs_error / greater : abs_error;
+    float compare_tolerance = std::max(kVerificationAbsTolerance, kVerificationRelTolerance * greater);
+
+    max_abs_error = std::max(max_abs_error, abs_error);
+    max_rel_error = std::max(max_rel_error, rel_error);
+
+    if (abs_error >= compare_tolerance) {
+      std::cerr << "Results do not match\n";
+      std::cerr << "First mismatch at vertex " << i << ": distributed=" << distributed
+                << ", reference=" << reference << ", abs_error=" << abs_error
+                << ", max_abs_error=" << max_abs_error
+                << ", max_rel_error=" << max_rel_error << "\n";
+      return false;
+    }
+  }
+
+  std::cerr << "Verification passed with max_abs_error=" << max_abs_error
+            << " and max_rel_error=" << max_rel_error << "\n";
+  return true;
 }
+
+} // namespace
 
 int hpx_main(int argc, char* argv[]) {
   std::vector<std::string> strings(argv + 1, argv + argc);
@@ -118,8 +155,6 @@ int hpx_main(int argc, char* argv[]) {
   for (auto&& file : files) {
 
     partitioned_adjacency graph = load_partitioned_adjacency_graph(file);
-
-    using vertex_id_type = typename decltype(graph)::vertex_id_type;
 
     auto sizes = graph.indices_.get_partition_sizes();
 
@@ -176,29 +211,7 @@ int hpx_main(int argc, char* argv[]) {
         else if (verify) {
           std::cout << "Verifying..." << std::endl;
           nw::util::life_timer _("verification");
-
-
-          // Load local copy of the graph
-           auto el_a = load_binary_graph<nw::graph::directedness::directed>(file);
-           auto loc_graph = build_adjacency<0>(el_a);
-           auto loc_degrees = degrees(loc_graph);
-          
-           std::vector<float> local_rankings(loc_graph.size());
-           page_rank_v1(loc_graph, loc_degrees, local_rankings, 0.85f, tolerance, max_iters);
-
-          const float rel_factor = 0.001;
-          bool mismatch = false;
-          for (size_t i = 0; i < graph.size(); ++i) {
-            float x1 = p_rankings[i];
-            float x2 = local_rankings[i];
-            float greater = std::max(std::fabs(x1), std::fabs(x2));
-            float are_same = std::abs(x1 - x2) < rel_factor * greater;
-            if (!are_same) {
-              mismatch = true;
-              std::cerr << "Results do not match\n";
-              break;
-            }
-          }
+          verify_partitioned_pagerank(file, p_rankings, tolerance, max_iters);
         }
       }
     }

@@ -51,8 +51,10 @@ namespace nw::graph {
       for (auto&& [v_dest, v_asked] : incoming_packet) {
         auto deg_iter = degrees.get_local_iterator(v_asked).local();
         auto pr_iter = page_rank.get_local_iterator(v_asked).local();
-        Real outgoing_contribution = *pr_iter / *deg_iter;
-        results.push_back(std::make_tuple(v_dest, outgoing_contribution));
+        if (*deg_iter != 0) {
+          Real outgoing_contribution = *pr_iter / *deg_iter;
+          results.push_back(std::make_tuple(v_dest, outgoing_contribution));
+        }
       }
       return results;
     }
@@ -142,7 +144,9 @@ namespace nw::graph {
               // handle things locally
               auto pr_iter = page_rank.get_local_iterator(v).local();
               auto deg_iter = degrees.get_local_iterator(v).local();
-              *acc_iter += *pr_iter / *deg_iter;
+              if (*deg_iter != 0) {
+                *acc_iter += *pr_iter / *deg_iter;
+              }
             }
             else {
               // send to elt's locality
