@@ -38,24 +38,24 @@ namespace nw::graph {
 
     ////////////////////////////////////////////////////////////////////////////
     // handle counting of triangles on target locality
-    template <typename Graph>
+    template <typename Graph, typename Partition>
     static size_t triangle_counter_4(
-      Graph G, partition_descriptor partition,
+      Graph G, Partition partition,
       std::vector<std::tuple<std::vector<vertex_id_t<std::remove_reference_t<Graph>>>,
                              std::vector<vertex_id_t<std::remove_reference_t<Graph>>>>> const&
         packets) {
 
       hpx::scoped_annotation ann_tc_handle_packet("TC_handle_packet");
 
-      auto G_loc = local_view(G, partition);
+      decltype(auto) G_data = detail::partition_data(G, partition);
 
-      auto get_tgt = [&G_loc](auto&& e) { return target(G_loc, e); };
+      auto get_tgt = [&G_data](auto&& e) { return target(G_data, e); };
 
       size_t triangles = 0;
       for (auto& packet : packets) {
         for (auto& v : std::get<0>(packet)) {
           auto& set1 = std::get<1>(packet);
-          auto set2 = G_loc[v] | std::ranges::views ::transform(get_tgt);
+          auto set2 = G_data[v] | std::ranges::views ::transform(get_tgt);
           triangles +=
             nw::graph::intersection_size(
               set1, set2, std::less<vertex_id_t<std::remove_reference_t<Graph>>>{});
@@ -64,10 +64,11 @@ namespace nw::graph {
       return triangles;
     }
 
-    template <typename Graph>
+    template <typename Graph, typename Partition>
     struct triangle_count_action_4
-      : hpx::actions::action<decltype(&triangle_counter_4<Graph>), &triangle_counter_4<Graph>,
-                             triangle_count_action_4<Graph>> {};
+      : hpx::actions::action<decltype(&triangle_counter_4<Graph, Partition>),
+                             &triangle_counter_4<Graph, Partition>,
+                             triangle_count_action_4<Graph, Partition>> {};
 
     ////////////////////////////////////////////////////////////////////////////
     struct triangle_count_4 : hpx::parallel::detail::algorithm<triangle_count_4, size_t> {
@@ -79,27 +80,28 @@ namespace nw::graph {
 
 
       template <typename ExPolicy, typename Graph>
-      static size_t sequential(ExPolicy&&, Graph G, partition_descriptor partition,
+      static size_t sequential(ExPolicy&&, Graph G, partition_t<std::remove_reference_t<Graph>> partition,
                              size_t batchsize) {
-        auto G_loc = local_view(G, partition);
+        decltype(auto) G_data = detail::partition_data(G, partition);
 
         hpx::scoped_annotation ann_tc_impl("TC_impl");
 
         using graph_type = std::remove_reference_t<Graph>;
         using vertex_id_type = vertex_id_t<graph_type>;
+        using partition_type = partition_t<graph_type>;
         using target_list_t = std::vector<
           std::tuple<std::vector<vertex_id_type>, std::vector<vertex_id_type>>>;
-        using remote_targets_t = std::map<partition_descriptor, target_list_t>;
+        using remote_targets_t = std::map<partition_type, target_list_t>;
 
-        auto cmp = [&G_loc](auto&& a, auto&& b) { return target(G_loc, a) < target(G_loc, b); };
+        auto cmp = [&G_data](auto&& a, auto&& b) { return target(G_data, a) < target(G_data, b); };
 
-        auto send_remote_action = [&](partition_descriptor target_partition,
+        auto send_remote_action = [&](partition_type const& target_partition,
                                       auto&& targets) -> hpx::future<size_t>
         {
           hpx::scoped_annotation ann_tc_send_remote("TC_send_remote");
-          triangle_count_action_4<graph_type> act;
+          triangle_count_action_4<graph_type, partition_type> act;
           return hpx::async(
-            act, partition_locality(target_partition), detail::remote_graph_ref(parent(G_loc)),
+            act, partition_locality(target_partition), detail::remote_graph_ref(G),
             target_partition, std::move(targets));
         };
 
@@ -113,19 +115,20 @@ namespace nw::graph {
           hpx::scoped_annotation ann_tc_per_vertex("TC_per_vertex");
           size_t triangles = 0;
           std::vector<vertex_id_type> neighbors;
-          std::map<partition_descriptor, std::vector<vertex_id_type>> target_vertices;
+          std::map<partition_type, std::vector<vertex_id_type>> target_vertices;
 
           for (auto const& edge : neighbor_range) {
 
-            vertex_id_type v = target(G_loc, edge);
+            vertex_id_type v = detail::edge_target(G_data, edge);
 
-            if (is_local_index(G_loc, v)) {
+            if (is_local(partition, v)) {
               // handle things locally
-              triangles += nw::graph::intersection_size(neighbor_range, G_loc[v], cmp);
+              auto target_neighbors = detail::iterable_row(G_data[v]);
+              triangles += nw::graph::intersection_size(neighbor_range, target_neighbors, cmp);
             }
             else {
               // send our neighbors to elt's locality
-              auto target_partition = vertex_partition(G_loc, v);
+              auto target_partition = vertex_partition(G, v);
               target_vertices[target_partition].push_back(v);
             }
 
@@ -153,7 +156,14 @@ namespace nw::graph {
 
         {
           hpx::scoped_annotation ann_tc_main_loop("TC_main_loop");
-          hpx::for_each(hpx::execution::par, G_loc.begin(), G_loc.end(), tc);
+          hpx::experimental::for_loop(
+            hpx::execution::par,
+            static_cast<vertex_id_type>(partition_first_index(partition)),
+            static_cast<vertex_id_type>(partition_last_index(partition)),
+            [&](vertex_id_type u) {
+              auto neighbor_range = detail::iterable_row(G_data[u]);
+              tc(neighbor_range);
+            });
         }
 
         // Send any remaining messages

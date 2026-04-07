@@ -23,11 +23,13 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <ranges>
 #include <utility>
 #include <type_traits>
 #include <vector>
 
 #include <hpx/async_combinators/wait_all.hpp>
+#include <hpx/algorithms/traits/is_value_proxy.hpp>
 #include <hpx/executors/execution_policy.hpp>
 #include <hpx/include/partitioned_vector_predef.hpp>
 #include <hpx/parallel/segmented_algorithms/detail/dispatch.hpp>
@@ -46,6 +48,46 @@ namespace nw::graph {
       else {
         return hpx::ref(G);
       }
+    }
+
+    template <typename Container, typename Partition>
+      requires partition_token<std::remove_cvref_t<Partition>>
+    decltype(auto) partition_data(Container& container, Partition const& partition) {
+      if constexpr (tag_invocable<local_view_tag, Container&, Partition>) {
+        return local_view(container, partition);
+      }
+      else {
+        return (container);
+      }
+    }
+
+    template <typename Row>
+    auto iterable_row(Row&& row) {
+      using row_type = std::remove_cvref_t<Row>;
+
+      if constexpr (hpx::traits::is_value_proxy_v<row_type>) {
+        return static_cast<hpx::traits::proxy_value_t<row_type>>(row);
+      }
+      else {
+        return std::forward<Row>(row);
+      }
+    }
+
+    template <typename Graph, typename Edge>
+    auto edge_target(Graph const& graph, Edge&& edge) {
+      if constexpr (requires { target(graph, std::forward<Edge>(edge)); }) {
+        return target(graph, std::forward<Edge>(edge));
+      }
+      else {
+        using graph_type = std::remove_reference_t<Graph>;
+        return static_cast<vertex_id_t<graph_type>>(std::forward<Edge>(edge));
+      }
+    }
+
+    template <typename Row>
+    auto row_size(Row&& row) {
+      auto normalized_row = iterable_row(std::forward<Row>(row));
+      return std::ranges::size(normalized_row);
     }
 
     template <typename Algorithm, typename = void>
@@ -161,14 +203,15 @@ namespace nw::graph {
   } // namespace detail
 
   template <typename G>
-  concept partitioned_algorithm_graph = partitioned_graph_with_local_view<G>;
+  concept partitioned_algorithm_graph = partitioned_graph<G>;
 
   /**
    * @brief Generic partition-aware algorithm implementation.
    *
-   * This is the semantic distributed graph entry point. Algorithms dispatched
-   * here operate on partition descriptors and `local_view(...)`, not on HPX
-   * segmented iterator internals.
+  * This is the semantic distributed graph entry point. Algorithms dispatched
+  * here operate on partition descriptors and global index ranges. `local_view`
+  * may still be used as an optional optimization, but is not part of the
+  * required graph integration contract.
    */
   template <typename Algorithm, typename ExPolicy, partitioned_graph Graph, typename... Ts>
     requires detail::is_partition_aware_algorithm<Algorithm>::value

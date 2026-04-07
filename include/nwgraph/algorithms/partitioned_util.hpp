@@ -124,15 +124,16 @@ namespace nw::graph {
 
 
       template <typename ExPolicy, typename Graph>
-      static int sequential(ExPolicy&& policy, Graph G, partition_descriptor partition,
+      static int sequential(ExPolicy&& policy, Graph G, partition_t<std::remove_reference_t<Graph>> partition,
                              hpx::partitioned_vector<vertex_id_t<std::remove_reference_t<Graph>>> degrees) {
 
-        auto G_loc = local_view(G, partition);
-        auto degrees_loc = local_view(degrees, partition);
+        decltype(auto) G_data = detail::partition_data(G, partition);
+        decltype(auto) degrees_data = detail::partition_data(degrees, partition);
 
-        auto u = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition.first_index());
-        for (auto v_it = G_loc.begin(); v_it != G_loc.end(); ++v_it, ++u) {
-          degrees_loc[u] = v_it->size();
+        auto u = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_first_index(partition));
+        auto end = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_last_index(partition));
+        for (; u != end; ++u) {
+          degrees_data[u] = detail::row_size(G_data[u]);
         }
 
         return 0;
@@ -190,16 +191,17 @@ namespace nw::graph {
 
 
       template <typename ExPolicy, typename Graph>
-      static double sequential(ExPolicy&& policy, Graph G, partition_descriptor partition) {
+      static double sequential(ExPolicy&& policy, Graph G, partition_t<std::remove_reference_t<Graph>> partition) {
 
-        auto G_loc = local_view(G, partition);
+        decltype(auto) G_data = detail::partition_data(G, partition);
 
         double count = 0;
-        double part_size = G_loc.size();
+        double part_size = partition_size(partition);
 
-        // for each v in G do
-        for (auto v_it = G_loc.begin(); v_it != G_loc.end(); ++v_it) {
-          count += v_it->size();
+        auto u = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_first_index(partition));
+        auto end = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_last_index(partition));
+        for (; u != end; ++u) {
+          count += detail::row_size(G_data[u]);
         }
 
         return count / part_size;
@@ -240,15 +242,17 @@ namespace nw::graph {
               "avg_remote_degree_per_partition") {}
 
         template <typename ExPolicy, typename Graph>
-        static double sequential(ExPolicy&& policy, Graph G, partition_descriptor partition) {
+        static double sequential(ExPolicy&& policy, Graph G, partition_t<std::remove_reference_t<Graph>> partition) {
           hpx::id_type this_locality_id = hpx::find_here();
-          auto G_loc = local_view(G, partition);
+          decltype(auto) G_data = detail::partition_data(G, partition);
           double count = 0;
-          double part_size = G_loc.size();
-          // for each v in G do
-          for (auto v_it = G_loc.begin(); v_it != G_loc.end(); ++v_it) {
-            for (auto&& neighbor : *v_it) {
-              auto v = target(G_loc, neighbor);
+          double part_size = partition_size(partition);
+          auto u = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_first_index(partition));
+          auto end = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_last_index(partition));
+          for (; u != end; ++u) {
+            auto neighbor_range = detail::iterable_row(G_data[u]);
+            for (auto&& neighbor : neighbor_range) {
+              auto v = detail::edge_target(G_data, neighbor);
               if (!is_local(partition, v)) {
                 count++;
               }

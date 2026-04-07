@@ -30,7 +30,9 @@
 #include <compare>
 #include <concepts>
 #include <cstddef>
+#include <ranges>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <hpx/assert.hpp>
@@ -46,6 +48,9 @@ namespace nw::graph {
   DECL_TAG_INVOKE(is_local_index);
   DECL_TAG_INVOKE(partition);
   DECL_TAG_INVOKE(remote_ref);
+  DECL_TAG_INVOKE(partition_locality);
+  DECL_TAG_INVOKE(partition_first_index);
+  DECL_TAG_INVOKE(partition_last_index);
 
   class partition_descriptor;
 
@@ -126,6 +131,32 @@ namespace nw::graph {
     std::size_t last_index_ = 0;
   };
 
+  inline hpx::id_type tag_invoke(partition_locality_tag, partition_descriptor const& partition) {
+    return partition.locality();
+  }
+
+  inline std::size_t tag_invoke(partition_first_index_tag, partition_descriptor const& partition) {
+    return partition.first_index();
+  }
+
+  inline std::size_t tag_invoke(partition_last_index_tag, partition_descriptor const& partition) {
+    return partition.last_index();
+  }
+
+  template <typename Partition>
+  concept partition_token = std::copyable<Partition> &&
+    requires(Partition const& partition) {
+      { partition_locality(partition) } -> std::same_as<hpx::id_type>;
+      { partition_first_index(partition) } -> std::convertible_to<std::size_t>;
+      { partition_last_index(partition) } -> std::convertible_to<std::size_t>;
+    };
+
+  template <partition_token Partition>
+  std::size_t partition_size(Partition const& partition) {
+    return static_cast<std::size_t>(partition_last_index(partition) -
+                                    partition_first_index(partition));
+  }
+
   namespace detail {
     inline hpx::id_type partition_id(partition_descriptor const& partition) {
       return partition.partition_id_;
@@ -183,10 +214,6 @@ namespace nw::graph {
       return partition_descriptor(HPX_MOVE(partition_id), HPX_MOVE(locality), first_index,
                                   last_index);
     }
-  }
-
-  inline hpx::id_type partition_locality(partition_descriptor partition) {
-    return partition.locality();
   }
 
 #if 0
@@ -446,25 +473,26 @@ using compressed = partitioned_index_compressed<default_index_t, default_vertex_
     return result;
   }
 
-  template <std::unsigned_integral VertexId>
-  bool is_local(partition_descriptor partition, VertexId v) {
+  template <partition_token Partition, std::unsigned_integral VertexId>
+  bool is_local(Partition const& partition, VertexId v) {
     auto index = static_cast<std::size_t>(v);
-    return partition.first_index() <= index && index < partition.last_index();
+    return partition_first_index(partition) <= index && index < partition_last_index(partition);
   }
+
+  template <typename G>
+  using partition_t = std::ranges::range_value_t<
+    decltype(partitions(std::declval<std::remove_reference_t<G> const&>()))>;
 
   template <typename G>
   concept partitioned_graph =
     requires(std::remove_reference_t<G> const& g,
-             vertex_id_t<std::remove_reference_t<G>> v,
-             partition_descriptor partition) {
+             vertex_id_t<std::remove_reference_t<G>> v) {
       typename vertex_id_t<std::remove_reference_t<G>>;
       { g.size() } -> std::convertible_to<std::size_t>;
-      { vertex_partition(g, v) } -> std::same_as<partition_descriptor>;
       { partitions(g) } -> std::ranges::random_access_range;
-      requires std::same_as<std::ranges::range_value_t<decltype(partitions(g))>,
-                            partition_descriptor>;
-      { partition_locality(partition) } -> std::same_as<hpx::id_type>;
-      { is_local(partition, v) } -> std::convertible_to<bool>;
+      requires partition_token<partition_t<G>>;
+      { vertex_partition(g, v) } -> std::same_as<partition_t<G>>;
+      { is_local(vertex_partition(g, v), v) } -> std::convertible_to<bool>;
     };
 
   template <typename G>

@@ -156,7 +156,7 @@ namespace nw::graph {
   template <typename G>
   concept partitioned_graph_with_local_view =
     partitioned_graph<G> &&
-    requires(G& g, partition_descriptor partition) {
+    requires(G& g, partition_t<G> partition) {
       { local_view(g, partition) } -> partitioned_graph_local_view;
     };
 

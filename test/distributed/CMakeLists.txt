@@ -15,3 +15,5 @@ macro (nwgraph_add_hpx_test TESTNAME)
 endmacro (nwgraph_add_hpx_test)
 
 nwgraph_add_hpx_test(partitioned_adj_io_test)
+nwgraph_add_hpx_test(partitioned_smoke_test)
+nwgraph_add_hpx_test(partitioned_range_of_ranges_test)
