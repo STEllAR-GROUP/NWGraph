@@ -229,7 +229,7 @@ namespace nw::graph {
 
     auto page_rank_iter = [&](auto&& from_pr, auto&& to_pr)
     {
-      return partitioned_algorithm<detail::page_rank_2<Real>>(
+      return partitioned_segmented_algorithm<detail::page_rank_2<Real>>(
         hpx::execution::seq, G, hpx::ref(from_pr), hpx::ref(to_pr), base_score, damping_factor);
     };
 

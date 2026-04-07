@@ -40,6 +40,7 @@ namespace nw::graph {
 
     index_t first_;
     index_t last_;
+    partition_descriptor partition_;
 
 
     nw::graph::util::partitioned_vector_local_partition_view<index_t> indices_;
@@ -66,11 +67,22 @@ namespace nw::graph {
 
     partitioned_indexed_struct_of_arrays_local_view(
       partitioned_indexed_struct_of_arrays<index_t, Attributes...>& parent_soa,
-      std::size_t parent_soa_partition)
-      : indices_(parent_soa.indices_, parent_soa_partition)
-      , to_be_indexed_(parent_soa.to_be_indexed_, parent_soa_partition) {
-      first_ = indices_.first_index();
-      last_ = indices_.last_index();
+      partition_descriptor partition)
+      : partition_(HPX_MOVE(partition))
+      , indices_(parent_soa.indices_, partition_)
+      , to_be_indexed_(
+          parent_soa.to_be_indexed_,
+          detail::aligned_partition(
+            parent_soa.indices_,
+            std::get<0>(
+              static_cast<typename partitioned_struct_of_arrays<Attributes...>::base const&>(
+                parent_soa.to_be_indexed_)),
+            partition_)) {
+      first_ = static_cast<index_t>(partition_.first_index());
+      last_ = static_cast<index_t>(partition_.last_index());
+      assert(indices_.is_local_index(first_));
+      assert(last_ >= first_);
+      assert(last_ <= indices_.last_index());
     }
 
     using const_outer_iterator =
@@ -94,20 +106,21 @@ namespace nw::graph {
     using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
     // Remember, the local part of indices_ resides between first_ and last_ in global indexes
-    iterator begin() { return {&indices_, &to_be_indexed_, first_}; }
-    const_iterator begin() const { return {&indices_, &to_be_indexed_, first_}; }
-    const_iterator cbegin() const { return {&indices_, &to_be_indexed_, first_}; }
-    iterator end() { return {&indices_, &to_be_indexed_, last_}; }
-    const_iterator end() const { return {&indices_, &to_be_indexed_, last_}; }
-    const_iterator cend() const { return {&indices_, &to_be_indexed_, last_}; }
+    iterator begin() { return {&indices_, &to_be_indexed_, first_, last_}; }
+    const_iterator begin() const { return {&indices_, &to_be_indexed_, first_, last_}; }
+    const_iterator cbegin() const { return {&indices_, &to_be_indexed_, first_, last_}; }
+    iterator end() { return {&indices_, &to_be_indexed_, last_, last_}; }
+    const_iterator end() const { return {&indices_, &to_be_indexed_, last_, last_}; }
+    const_iterator cend() const { return {&indices_, &to_be_indexed_, last_, last_}; }
 
     /// Random access to the outer range (using global index).
-    sub_view operator[](index_t i) { return *iterator{&indices_, &to_be_indexed_, i}; }
-    const_sub_view operator[](index_t i) const { return *iterator{&indices_, &to_be_indexed_, i}; }
+    sub_view operator[](index_t i) { return *iterator{&indices_, &to_be_indexed_, i, last_}; }
+    const_sub_view operator[](index_t i) const {
+      return *iterator{&indices_, &to_be_indexed_, i, last_};
+    }
 
-    // TODO: Should we return local or global size here?
-    index_t size() const { return indices_.size() - 1; }
-    index_t max() const { return indices_.size() - 2; }
+    index_t size() const { return last_ - first_; }
+    index_t max() const { return size() - 1; }
 
     auto& get_indices() { return indices_; }
     auto& get_to_be_indexed() { return to_be_indexed_; }
@@ -119,6 +132,8 @@ namespace nw::graph {
     bool is_local_index(index_t global_index) const {
       return indices_.is_local_index(global_index);
     }
+
+    partition_descriptor partition() const { return partition_; }
   };
 
   template <typename index_t, bool is_const, typename... Attributes>
@@ -143,6 +158,7 @@ namespace nw::graph {
     indices_t indices_;
     indexed_t indexed_;
     index_t i_;
+    index_t vertex_last_;
 
   public:
     using difference_type = std::make_signed_t<index_t>;
@@ -153,10 +169,12 @@ namespace nw::graph {
 
     partitioned_indexed_local_view_outer_iterator() = default;
 
-    partitioned_indexed_local_view_outer_iterator(indices_t indices, indexed_t indexed, index_t i)
+    partitioned_indexed_local_view_outer_iterator(
+      indices_t indices, indexed_t indexed, index_t i, index_t vertex_last)
       : indices_(indices)
       , indexed_(indexed)
-      , i_(i) {}
+      , i_(i)
+      , vertex_last_(vertex_last) {}
 
     partitioned_indexed_local_view_outer_iterator(
       partitioned_indexed_local_view_outer_iterator const&) = default;
@@ -165,7 +183,8 @@ namespace nw::graph {
       requires(is_const)
       : indices_(rhs.indices_)
       , indexed_(rhs.indexed_)
-      , i_(rhs.i_) {}
+      , i_(rhs.i_)
+      , vertex_last_(rhs.vertex_last_) {}
 
     partitioned_indexed_local_view_outer_iterator&
     operator=(partitioned_indexed_local_view_outer_iterator const&) = default;
@@ -176,6 +195,7 @@ namespace nw::graph {
       indices_ = rhs.indices_;
       indexed_ = rhs.indexed_;
       i_ = rhs.i_;
+      vertex_last_ = rhs.vertex_last_;
       return *this;
     }
 
@@ -213,11 +233,11 @@ namespace nw::graph {
     }
 
     partitioned_indexed_local_view_outer_iterator operator+(difference_type n) const {
-      return {indices_, indexed_, i_ + n};
+      return {indices_, indexed_, i_ + n, vertex_last_};
     }
 
     partitioned_indexed_local_view_outer_iterator operator-(difference_type n) const {
-      return {indices_, indexed_, i_ - n};
+      return {indices_, indexed_, i_ - n, vertex_last_};
     }
 
     difference_type operator-(partitioned_indexed_local_view_outer_iterator const& b) const {
@@ -253,7 +273,7 @@ namespace nw::graph {
     // containing all remaining local edges.
     auto indexed_next(index_t i) const {
       // If i+1 is the last local index, return the end of indexed_
-      if (i + 1 == indices_->last_index()) {
+      if (i + 1 == vertex_last_) {
         return indexed_->end();
       }
       else {

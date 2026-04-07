@@ -18,10 +18,13 @@
 #error "This file requires using HPX as a backend for NWGraph"
 #endif
 
+#include "nwgraph/partition.hpp"
 #include "nwgraph/algorithms/triangle_count.hpp"
 
 #include <algorithm>
 #include <cstddef>
+#include <utility>
+#include <type_traits>
 #include <vector>
 
 #include <hpx/async_combinators/wait_all.hpp>
@@ -35,33 +38,31 @@
 namespace nw::graph {
 
   namespace detail {
+    template <typename Graph>
+    decltype(auto) remote_graph_ref(Graph& G) {
+      if constexpr (tag_invocable<remote_ref_tag, Graph&>) {
+        return remote_ref(G);
+      }
+      else {
+        return hpx::ref(G);
+      }
+    }
+
+    template <typename Algorithm, typename = void>
+    struct is_partition_aware_algorithm : std::false_type {};
+
+    template <typename Algorithm>
+    struct is_partition_aware_algorithm<Algorithm, std::void_t<decltype(Algorithm::partition_aware)>>
+      : std::bool_constant<Algorithm::partition_aware> {};
 
     template <typename Graph, typename Vertex>
     hpx::id_type vertex_locality(Graph const& G, Vertex v) {
-      using traits = hpx::traits::segmented_iterator_traits<decltype(G.begin().index())>;
-      return hpx::naming::get_locality_from_id(
-        traits::get_id(traits::segment((G.begin() + v).index())));
+      return partition_locality(vertex_partition(G, v));
     }
 
     template <typename Graph, typename Vertex>
     std::uint32_t vertex_locality_id(Graph const& G, Vertex v) {
-      using traits = hpx::traits::segmented_iterator_traits<decltype(G.begin().index())>;
-      return hpx::naming::get_locality_id_from_id(
-        traits::get_id(traits::segment((G.begin() + v).index())));
-    }
-
-    template <typename Graph, typename Vertex>
-    hpx::id_type vertex_partition_id(Graph const& G, Vertex v) {
-      using traits = hpx::traits::segmented_iterator_traits<decltype(G.begin().index())>;
-      return traits::get_id(traits::segment((G.begin() + v).index()));
-    }
-
-    template <typename Graph, typename Vertex>
-    std::size_t vertex_partition_num(Graph const& G, Vertex v) {
-      // TODO: Find a way to do this without breaking encapsulation
-      // These partition IDs are kinda internal to the underlying hpx::partitioned_vector
-      // And we cannot necessarily assume that the Vertex type can directly index into it
-      return G.indices_.get_partition(std::size_t(v));
+      return hpx::naming::get_locality_id_from_id(vertex_locality(G, v));
     }
 
     template <typename Graph, typename Vertex>
@@ -111,8 +112,8 @@ namespace nw::graph {
     template <typename Graph>
     static size_t triangle_counter(
       Graph G,
-      std::vector<std::tuple<typename Graph::vertex_id_type,
-                             std::vector<std::tuple<typename Graph::vertex_id_type>>>> const&
+      std::vector<std::tuple<vertex_id_t<std::remove_reference_t<Graph>>,
+                             std::vector<std::tuple<vertex_id_t<std::remove_reference_t<Graph>>>>>> const&
         targets) {
 
       size_t triangles = 0;
@@ -132,8 +133,8 @@ namespace nw::graph {
     template <typename Graph>
     static size_t triangle_counter_1(
       Graph G,
-      std::vector<std::tuple<std::vector<typename Graph::vertex_id_type>,
-                             std::vector<std::tuple<typename Graph::vertex_id_type>>>> const&
+      std::vector<std::tuple<std::vector<vertex_id_t<std::remove_reference_t<Graph>>>,
+                             std::vector<std::tuple<vertex_id_t<std::remove_reference_t<Graph>>>>>> const&
         targets) {
 
       size_t triangles = 0;
@@ -149,16 +150,60 @@ namespace nw::graph {
     struct triangle_count_action_1
       : hpx::actions::action<decltype(&triangle_counter_1<Graph>), &triangle_counter_1<Graph>,
                              triangle_count_action_1<Graph>> {};
+
+    template <typename G>
+    concept legacy_segmented_partitioned_graph =
+      adjacency_list_graph<G> &&
+      requires(G& g) {
+        g.begin().index();
+        g.end().index();
+      };
   } // namespace detail
 
+  template <typename G>
+  concept partitioned_algorithm_graph = partitioned_graph_with_local_view<G>;
+
   /**
-   * @brief Generic segemented algorithm implementation
+   * @brief Generic partition-aware algorithm implementation.
    *
-   * @tparam Graph adjacency_list_graph
-   * @param G graph
+   * This is the semantic distributed graph entry point. Algorithms dispatched
+   * here operate on partition descriptors and `local_view(...)`, not on HPX
+   * segmented iterator internals.
    */
-  template <typename Algorithm, typename ExPolicy, adjacency_list_graph Graph, typename... Ts>
+  template <typename Algorithm, typename ExPolicy, partitioned_graph Graph, typename... Ts>
+    requires detail::is_partition_aware_algorithm<Algorithm>::value
   [[gnu::noinline]] auto partitioned_algorithm(ExPolicy&& policy, Graph& G, Ts&&... ts) {
+    using algorithm_t = Algorithm;
+    using result_t = typename algorithm_t::result_type;
+
+    std::vector<hpx::future<result_t>> results;
+    auto graph_partitions = partitions(G);
+    results.reserve(graph_partitions.size());
+
+    for (auto partition : graph_partitions) {
+      results.push_back(dispatch_async(
+        partition_locality(partition), algorithm_t{}, policy, std::true_type(),
+        detail::remote_graph_ref(G),
+        partition, ts...));
+    }
+
+    hpx::wait_all(results);
+    return results;
+  }
+
+  /**
+   * @brief Legacy HPX-segmented fallback for older distributed algorithms.
+   *
+   * This path relies on segmented iterator `.index()` semantics and is not part
+   * of the generic partition-aware extension contract.
+   */
+  template <typename Algorithm, typename ExPolicy, detail::legacy_segmented_partitioned_graph Graph,
+            typename... Ts>
+    requires (!detail::is_partition_aware_algorithm<Algorithm>::value)
+  [[gnu::noinline]] auto partitioned_segmented_algorithm(ExPolicy&& policy, Graph& G, Ts&&... ts) {
+    using algorithm_t = Algorithm;
+    using result_t = typename algorithm_t::result_type;
+
     auto first = G.begin();
     auto last = G.end();
 
@@ -169,9 +214,6 @@ namespace nw::graph {
     segment_iterator sit = traits::segment(first.index());
     segment_iterator send = traits::segment(last.index());
 
-    using algorithm_t = Algorithm;
-    using result_t = typename algorithm_t::result_type;
-
     std::vector<hpx::future<result_t>> results;
     results.reserve(send - sit + 1);
 
@@ -181,7 +223,8 @@ namespace nw::graph {
       local_iterator_type end = traits::local(last.index());
       if (beg != end) {
         results.push_back(dispatch_async(
-          traits::get_id(sit), algorithm_t{}, policy, std::true_type(), hpx::ref(G),
+          traits::get_id(sit), algorithm_t{}, policy, std::true_type(),
+          detail::remote_graph_ref(G),
           detail::global_index<traits>(sit, beg), detail::global_index<traits>(sit, end), ts...));
       }
     }
@@ -192,7 +235,8 @@ namespace nw::graph {
 
       if (beg != end) {
         results.push_back(dispatch_async(
-          traits::get_id(sit), algorithm_t{}, policy, std::true_type(), hpx::ref(G),
+          traits::get_id(sit), algorithm_t{}, policy, std::true_type(),
+          detail::remote_graph_ref(G),
           detail::global_index<traits>(sit, beg), detail::global_index<traits>(sit, end), ts...));
       }
 
@@ -203,7 +247,8 @@ namespace nw::graph {
 
         if (beg != end) {
           results.push_back(dispatch_async(
-            traits::get_id(sit), algorithm_t{}, policy, std::true_type(), hpx::ref(G),
+            traits::get_id(sit), algorithm_t{}, policy, std::true_type(),
+            detail::remote_graph_ref(G),
             detail::global_index<traits>(sit, beg), detail::global_index<traits>(sit, end), ts...));
         }
       }
@@ -213,7 +258,8 @@ namespace nw::graph {
       end = traits::local(last.index());
       if (beg != end) {
         results.push_back(dispatch_async(
-          traits::get_id(sit), algorithm_t{}, policy, std::true_type(), hpx::ref(G),
+          traits::get_id(sit), algorithm_t{}, policy, std::true_type(),
+          detail::remote_graph_ref(G),
           detail::global_index<traits>(sit, beg), detail::global_index<traits>(sit, end), ts...));
       }
     }

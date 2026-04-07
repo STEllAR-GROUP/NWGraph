@@ -21,15 +21,173 @@
 
 #include "nwgraph/adjacency.hpp"
 #include "nwgraph/containers/partitioned_compressed.hpp"
+#include "nwgraph/util/tag_invoke.hpp"
 
 // #include "nwgraph/partitioned_build.hpp"
 
+#include <algorithm>
 #include <array>
+#include <compare>
 #include <concepts>
+#include <cstddef>
+#include <type_traits>
+#include <vector>
 
+#include <hpx/assert.hpp>
 #include <hpx/include/partitioned_vector_predef.hpp>
+#include <hpx/include/serialization.hpp>
 
 namespace nw::graph {
+
+  DECL_TAG_INVOKE(vertex_partition);
+  DECL_TAG_INVOKE(partitions);
+  DECL_TAG_INVOKE(local_view);
+  DECL_TAG_INVOKE(parent);
+  DECL_TAG_INVOKE(is_local_index);
+  DECL_TAG_INVOKE(partition);
+  DECL_TAG_INVOKE(remote_ref);
+
+  class partition_descriptor;
+
+  namespace detail {
+    template <typename Graph>
+    concept graph_with_index_partitions =
+      requires(Graph const& G) {
+        G.get_indices().partitions();
+        G.get_indices().segment_begin();
+        G.get_indices().segment_end();
+      };
+
+    hpx::id_type partition_id(partition_descriptor const& partition);
+    partition_descriptor make_partition_descriptor(
+      hpx::id_type partition_id, hpx::id_type locality, std::size_t first_index,
+      std::size_t last_index);
+  } // namespace detail
+
+  class partition_descriptor {
+    friend class hpx::serialization::access;
+
+  public:
+    partition_descriptor() = default;
+
+    hpx::id_type locality() const { return locality_; }
+    std::size_t first_index() const { return first_index_; }
+    std::size_t last_index() const { return last_index_; }
+    std::size_t size() const { return last_index_ - first_index_; }
+
+    friend bool operator==(partition_descriptor lhs, partition_descriptor rhs) {
+      return lhs.partition_id_ == rhs.partition_id_ && lhs.locality_ == rhs.locality_ &&
+             lhs.first_index_ == rhs.first_index_ && lhs.last_index_ == rhs.last_index_;
+    }
+
+    friend auto operator<=>(partition_descriptor lhs, partition_descriptor rhs) {
+      if (auto cmp = lhs.first_index_ <=> rhs.first_index_; cmp != 0) {
+        return cmp;
+      }
+      if (auto cmp = lhs.last_index_ <=> rhs.last_index_; cmp != 0) {
+        return cmp;
+      }
+      if (lhs.partition_id_ < rhs.partition_id_) {
+        return std::strong_ordering::less;
+      }
+      if (rhs.partition_id_ < lhs.partition_id_) {
+        return std::strong_ordering::greater;
+      }
+      if (lhs.locality_ < rhs.locality_) {
+        return std::strong_ordering::less;
+      }
+      if (rhs.locality_ < lhs.locality_) {
+        return std::strong_ordering::greater;
+      }
+      return std::strong_ordering::equal;
+    }
+
+  private:
+    friend hpx::id_type detail::partition_id(partition_descriptor const&);
+    friend partition_descriptor detail::make_partition_descriptor(
+      hpx::id_type, hpx::id_type, std::size_t, std::size_t);
+
+    template <typename Archive>
+    void serialize(Archive& ar, unsigned) {
+      ar& partition_id_& locality_& first_index_& last_index_;
+    }
+
+    partition_descriptor(
+      hpx::id_type partition_id, hpx::id_type locality, std::size_t first_index,
+      std::size_t last_index)
+      : partition_id_(HPX_MOVE(partition_id))
+      , locality_(HPX_MOVE(locality))
+      , first_index_(first_index)
+      , last_index_(last_index) {}
+
+    hpx::id_type partition_id_;
+    hpx::id_type locality_;
+    std::size_t first_index_ = 0;
+    std::size_t last_index_ = 0;
+  };
+
+  namespace detail {
+    inline hpx::id_type partition_id(partition_descriptor const& partition) {
+      return partition.partition_id_;
+    }
+
+    template <typename PartitionedVector>
+    auto find_partition_by_id(PartitionedVector const& pv, partition_descriptor partition) {
+      return std::find_if(
+        pv.segment_begin(), pv.segment_end(),
+        [&](auto const& pv_partition) { return pv_partition.get_id() == partition_id(partition); });
+    }
+
+    template <typename PartitionedVector>
+    auto find_matching_partition(PartitionedVector const& pv, partition_descriptor partition) {
+      auto it = std::find_if(
+        pv.segment_begin(), pv.segment_end(),
+        [&](auto const& pv_partition)
+        {
+          auto first_index = static_cast<std::size_t>(pv_partition.first_);
+          auto last_index = static_cast<std::size_t>(pv_partition.first_ + pv_partition.size_);
+          last_index = std::min(last_index, static_cast<std::size_t>(pv.size()));
+          return first_index == partition.first_index() && last_index == partition.last_index() &&
+                 hpx::naming::get_locality_from_id(pv_partition.get_id()) == partition.locality();
+        });
+      HPX_ASSERT(it != pv.segment_end());
+      return it;
+    }
+
+    template <typename PartitionedVector, typename SegmentIterator>
+    partition_descriptor describe_partition(PartitionedVector const& pv, SegmentIterator partition) {
+      auto partition_id = partition->get_id();
+      auto locality = hpx::naming::get_locality_from_id(partition_id);
+      auto first_index = static_cast<std::size_t>(partition->first_);
+      auto last_index = static_cast<std::size_t>(partition->first_ + partition->size_);
+      last_index = std::min(last_index, static_cast<std::size_t>(pv.size()));
+      return make_partition_descriptor(
+        HPX_MOVE(partition_id), HPX_MOVE(locality), first_index, last_index);
+    }
+
+    template <typename SourcePartitionedVector, typename TargetPartitionedVector>
+    partition_descriptor aligned_partition(
+      SourcePartitionedVector const& source, TargetPartitionedVector const& target,
+      partition_descriptor partition) {
+      auto source_partition = find_partition_by_id(source, partition);
+      HPX_ASSERT(source_partition != source.segment_end());
+      auto offset = std::distance(source.segment_begin(), source_partition);
+      auto target_partition = target.segment_begin();
+      std::advance(target_partition, offset);
+      return describe_partition(target, target_partition);
+    }
+
+    inline partition_descriptor make_partition_descriptor(
+      hpx::id_type partition_id, hpx::id_type locality, std::size_t first_index,
+      std::size_t last_index) {
+      return partition_descriptor(HPX_MOVE(partition_id), HPX_MOVE(locality), first_index,
+                                  last_index);
+    }
+  }
+
+  inline hpx::id_type partition_locality(partition_descriptor partition) {
+    return partition.locality();
+  }
 
 #if 0
 template <std::unsigned_integral index_type, std::unsigned_integral vertex_id_type, typename... Attributes>
@@ -257,6 +415,66 @@ using compressed = partitioned_index_compressed<default_index_t, default_vertex_
   template <int idx, typename... Attributes>
   using partitioned_adjacency =
     partitioned_index_adjacency<idx, default_index_t, default_vertex_id_type, Attributes...>;
+
+  namespace detail {
+    template <typename Graph, typename SegmentIterator>
+    partition_descriptor partition_from_segment(Graph const& G, SegmentIterator partition) {
+      return describe_partition(G, partition);
+    }
+  } // namespace detail
+
+  template <typename Graph, std::unsigned_integral VertexId>
+    requires detail::graph_with_index_partitions<std::remove_reference_t<Graph>> &&
+             std::convertible_to<VertexId, vertex_id_t<std::remove_reference_t<Graph>>>
+  partition_descriptor tag_invoke(vertex_partition_tag, Graph const& G, VertexId v) {
+    auto partition = G.get_indices().get_segment_iterator(static_cast<std::size_t>(v));
+    return detail::partition_from_segment(G, partition);
+  }
+
+  template <typename Graph>
+    requires detail::graph_with_index_partitions<std::remove_reference_t<Graph>>
+  std::vector<partition_descriptor> tag_invoke(partitions_tag, Graph const& G) {
+    std::vector<partition_descriptor> result;
+    auto const& graph_partitions = G.get_indices().partitions();
+    result.reserve(graph_partitions.size());
+
+    auto partition = G.get_indices().segment_begin();
+    auto partition_end = G.get_indices().segment_end();
+    for (; partition != partition_end; ++partition) {
+      result.push_back(detail::partition_from_segment(G, partition));
+    }
+    return result;
+  }
+
+  template <std::unsigned_integral VertexId>
+  bool is_local(partition_descriptor partition, VertexId v) {
+    auto index = static_cast<std::size_t>(v);
+    return partition.first_index() <= index && index < partition.last_index();
+  }
+
+  template <typename G>
+  concept partitioned_graph =
+    requires(std::remove_reference_t<G> const& g,
+             vertex_id_t<std::remove_reference_t<G>> v,
+             partition_descriptor partition) {
+      typename vertex_id_t<std::remove_reference_t<G>>;
+      { g.size() } -> std::convertible_to<std::size_t>;
+      { vertex_partition(g, v) } -> std::same_as<partition_descriptor>;
+      { partitions(g) } -> std::ranges::random_access_range;
+      requires std::same_as<std::ranges::range_value_t<decltype(partitions(g))>,
+                            partition_descriptor>;
+      { partition_locality(partition) } -> std::same_as<hpx::id_type>;
+      { is_local(partition, v) } -> std::convertible_to<bool>;
+    };
+
+  template <typename G>
+  concept copartitioned_graph =
+    partitioned_graph<G> &&
+    requires(std::remove_reference_t<G> const& g) {
+      { g.get_indices().size() } -> std::convertible_to<std::size_t>;
+      { g.get_indices().get_partition_sizes() };
+      { g.get_indices().get_partition_localities() };
+    };
 
   template <int idx, edge_list_graph edge_list_t>
   auto make_partitioned_adjacency(edge_list_t& el) {

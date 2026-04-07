@@ -128,7 +128,7 @@ namespace nw::graph {
 
   template <adjacency_list_graph Graph>
   size_t partitioned_triangle_count_1(Graph& G) {
-    auto counts = partitioned_algorithm<detail::triangle_count_1>(hpx::execution::seq, G);
+    auto counts = partitioned_segmented_algorithm<detail::triangle_count_1>(hpx::execution::seq, G);
     return std::transform_reduce(
       counts.begin(), counts.end(), size_t(0),
       [](size_t count, size_t curr) { return count + curr; }, [](auto&& f) { return f.get(); });

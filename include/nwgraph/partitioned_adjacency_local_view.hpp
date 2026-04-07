@@ -20,18 +20,26 @@
 #endif
 
 #include "nwgraph/partitioned_adjacency.hpp"
-#include "nwgraph/containers/partitioned_compressed.hpp"
+#include "nwgraph/containers/partitioned_compressed_local_view.hpp"
 #include "nwgraph/containers/partitioned_soa_local_view.hpp"
 #include "nwgraph/util/tag_invoke.hpp"
 
 // #include "nwgraph/partitioned_build.hpp"
 
 #include <array>
+#include <cstddef>
 #include <concepts>
+#include <type_traits>
 
+#include <hpx/assert.hpp>
 #include <hpx/include/partitioned_vector_predef.hpp>
 
 namespace nw::graph {
+
+  namespace detail {
+    template <typename Graph>
+    struct local_graph_view;
+  } // namespace detail
 
   template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id,
             typename... Attributes>
@@ -56,8 +64,9 @@ namespace nw::graph {
 
     partitioned_index_adjacency_local_view(
       partitioned_index_adjacency<idx, index_type, vertex_id, Attributes...>& parent,
-      std::size_t partnum)
-      : base(parent, partnum), parent_(&parent) {}
+      partition_descriptor partition)
+      : base(parent, partition)
+      , parent_(&parent) {}
 
 
     num_vertices_type num_vertices() const { return {base::size()}; };
@@ -67,12 +76,89 @@ namespace nw::graph {
         assert(parent_ != nullptr);
         return *parent_; 
     }
+
+    graph_type const& parent() const {
+        assert(parent_ != nullptr);
+        return *parent_;
+    }
   };
 
   template <int idx, typename... Attributes>
   using partitioned_adjacency_local_view =
     partitioned_index_adjacency_local_view<idx, default_index_t, default_vertex_id_type,
                                            Attributes...>;
+
+  namespace detail {
+    template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id,
+              typename... Attributes>
+    struct local_graph_view<partitioned_index_adjacency<idx, index_type, vertex_id, Attributes...>> {
+      using type =
+        partitioned_index_adjacency_local_view<idx, index_type, vertex_id, Attributes...>;
+    };
+
+  } // namespace detail
+
+  template <typename Graph>
+    requires requires { typename detail::local_graph_view<std::remove_reference_t<Graph>>::type; }
+  auto tag_invoke(local_view_tag, Graph& G, partition_descriptor partition)
+    -> typename detail::local_graph_view<std::remove_reference_t<Graph>>::type {
+    using local_view_t = typename detail::local_graph_view<std::remove_reference_t<Graph>>::type;
+    return local_view_t(G, partition);
+  }
+
+  template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id,
+            typename... Attributes>
+  auto& tag_invoke(parent_tag,
+    partitioned_index_adjacency_local_view<idx, index_type, vertex_id, Attributes...>& G) {
+    return G.parent();
+  }
+
+  template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id,
+            typename... Attributes>
+  auto const& tag_invoke(parent_tag,
+    partitioned_index_adjacency_local_view<idx, index_type, vertex_id, Attributes...> const& G) {
+    return G.parent();
+  }
+
+  template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id,
+            typename... Attributes, std::unsigned_integral VertexId>
+  bool tag_invoke(is_local_index_tag,
+    partitioned_index_adjacency_local_view<idx, index_type, vertex_id, Attributes...> const& G,
+    VertexId v) {
+    return G.is_local_index(static_cast<index_type>(v));
+  }
+
+  template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id,
+            typename... Attributes>
+  partition_descriptor tag_invoke(partition_tag,
+    partitioned_index_adjacency_local_view<idx, index_type, vertex_id, Attributes...> const& G) {
+    return G.partition();
+  }
+
+  template <int idx, std::unsigned_integral index_type, std::unsigned_integral vertex_id,
+            typename... Attributes, std::unsigned_integral VertexId>
+    requires std::convertible_to<VertexId, vertex_id>
+  partition_descriptor tag_invoke(vertex_partition_tag,
+    partitioned_index_adjacency_local_view<idx, index_type, vertex_id, Attributes...> const& G,
+    VertexId v) {
+    return vertex_partition(parent(G), v);
+  }
+
+  template <typename G>
+  concept partitioned_graph_local_view =
+    adjacency_list_graph<G> &&
+    requires(G& g, std::size_t global_idx) {
+      typename std::remove_reference_t<G>::graph_type;
+      { parent(g) } -> partitioned_graph;
+      { is_local_index(g, global_idx) } -> std::convertible_to<bool>;
+    };
+
+  template <typename G>
+  concept partitioned_graph_with_local_view =
+    partitioned_graph<G> &&
+    requires(G& g, partition_descriptor partition) {
+      { local_view(g, partition) } -> partitioned_graph_local_view;
+    };
 
 
   ///**

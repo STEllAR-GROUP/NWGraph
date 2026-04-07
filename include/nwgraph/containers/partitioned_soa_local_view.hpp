@@ -41,9 +41,7 @@ namespace nw::graph {
   struct partitioned_struct_of_arrays_local_view
     : std::tuple<partitioned_vector_local_partition_view<Attributes>...> {
     using base = std::tuple<partitioned_vector_local_partition_view<Attributes>...>;
-
-    std::size_t loc_begin_;
-    std::size_t loc_end_;
+    partition_descriptor partition_;
 
   public:
     template <bool is_const = false>
@@ -190,21 +188,21 @@ namespace nw::graph {
 
   private:
     // Helper to go from tuple<pv> to tuple<pv_local_view>
-    base _constructor_tuple_helper(partitioned_struct_of_arrays<Attributes...>& soa,
-                                   std::size_t partnum) {
+    base _constructor_tuple_helper(
+      partitioned_struct_of_arrays<Attributes...>& soa, partition_descriptor partition) {
       return std::apply(
         [&](auto&... pvec)
         {
-          return std::make_tuple(
-            partitioned_vector_local_partition_view(pvec, partnum)...);
+          return std::make_tuple(partitioned_vector_local_partition_view(pvec, partition)...);
         },
         static_cast<typename partitioned_struct_of_arrays<Attributes...>::base&>(soa));
     }
 
   public:
     explicit partitioned_struct_of_arrays_local_view(
-      partitioned_struct_of_arrays<Attributes...>& soa, std::size_t partnum)
-      : base(_constructor_tuple_helper(soa, partnum)) {}
+      partitioned_struct_of_arrays<Attributes...>& soa, partition_descriptor partition)
+      : base(_constructor_tuple_helper(soa, partition))
+      , partition_(HPX_MOVE(partition)) {}
 
     iterator begin() {
       std::size_t i = std::get<0>(static_cast<base&>(*this)).first_index();
@@ -261,6 +259,8 @@ namespace nw::graph {
     bool is_local_index(std::size_t global_idx) const {
       return std::get<0>(static_cast<base const&>(*this)).is_local_index(global_idx);
     }
+
+    partition_descriptor partition() const { return partition_; }
   };
 } // namespace nw::graph
 

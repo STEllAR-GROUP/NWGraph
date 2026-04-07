@@ -337,17 +337,20 @@ namespace nw::graph {
 
     struct read_partitioned_adj_part
       : hpx::parallel::detail::algorithm<read_partitioned_adj_part, int> {
+      static constexpr bool partition_aware = true;
 
       constexpr read_partitioned_adj_part() noexcept
         : hpx::parallel::detail::algorithm<read_partitioned_adj_part, int>(
             "read_partitioned_adj_part") {}
 
       template <typename ExPolicy>
-      static int sequential(ExPolicy&&, partitioned_adjacency<0> G, size_t first_index,
-                            size_t last_index, std::string file_name) {
+      static int sequential(ExPolicy&&, partitioned_adjacency<0> G,
+                            partition_descriptor partition, std::string file_name) {
 
         using reader_t = adj_reader<default_index_t, default_vertex_id_type>;
         reader_t reader(file_name);
+        auto first_index = partition.first_index();
+        auto last_index = partition.last_index();
         auto [indices, to_be_indexed] = reader.read_part(first_index, last_index);
         if (last_index != G.size()) {
           indices.pop_back(); // Will be included in the next partition.

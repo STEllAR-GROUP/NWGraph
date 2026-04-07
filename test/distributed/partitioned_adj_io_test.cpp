@@ -36,7 +36,7 @@ TEST_CASE("partitioned adj (compressed)  I/O", "[partitioned_compressed_io]") {
     //auto C = read_mm<directedness::directed>(DATA_DIR "USAir97.mtx");
     //auto D = read_mm<directedness::undirected>(DATA_DIR "USAir97.mtx");
 
-    edge_list A_local = read_mm<directedness::undirected>(DATA_DIR "karate.mtx");
+    auto A_local = read_mm<directedness::undirected>(DATA_DIR "karate.mtx");
 
     
     std::string A_bin_file = partitioned_serialize_adj(DATA_DIR "karate.mtx");

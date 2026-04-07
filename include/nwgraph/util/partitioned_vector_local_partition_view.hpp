@@ -6,7 +6,11 @@
 #error "This file requires using HPX as a backend for NWGraph"
 #endif
 
-#include <hpx/include/partitioned_vector_predef.hpp>
+#include "nwgraph/partitioned_adjacency.hpp"
+
+#include <hpx/components/get_ptr.hpp>
+#include <hpx/include/partitioned_vector.hpp>
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -37,6 +41,7 @@ namespace nw::graph::util {
     // Global index of the first element in this partition
     std::size_t first_;
     std::size_t size_;
+    partition_descriptor partition_;
 
     // friend class hpx::serialization::access;
 
@@ -60,13 +65,18 @@ namespace nw::graph::util {
 
     // partitioned_vector_local_partition_view() = default;
 
-    partitioned_vector_local_partition_view(hpx::partitioned_vector<T>& pv, std::size_t partnum)
-      : parent_(&pv) {
-      HPX_ASSERT(partnum < pv.partitions().size());
-      auto& partition = pv.partitions()[partnum];
-      first_ = partition.first_;
-      size_ = partition.size_;
-      data_ = partition.local_data_;
+    partitioned_vector_local_partition_view(
+      hpx::partitioned_vector<T>& pv, partition_descriptor partition)
+      : parent_(&pv)
+      , partition_(HPX_MOVE(partition)) {
+      auto component_id = detail::partition_id(partition_);
+      if (detail::find_partition_by_id(pv, partition_) == pv.segment_end()) {
+        component_id = detail::find_matching_partition(pv, partition_)->get_id();
+      }
+      first_ = partition_.first_index();
+      size_ = partition_.size();
+      data_ = hpx::get_ptr<partitioned_vector_server>(hpx::launch::sync, component_id);
+      HPX_ASSERT(data_);
     }
 
     bool is_local_index(std::size_t global_idx) const {
@@ -105,10 +115,16 @@ namespace nw::graph::util {
     std::size_t size() const { return size_; }
     std::size_t first_index() const { return first_; }
     std::size_t last_index() const { return first_ + size_; }
+    partition_descriptor partition() const { return partition_; }
 
     hpx::partitioned_vector<T>& parent() {
         assert(parent_);
         return *parent_; 
+    }
+
+    hpx::partitioned_vector<T> const& parent() const {
+        assert(parent_);
+        return *parent_;
     }
   };
 

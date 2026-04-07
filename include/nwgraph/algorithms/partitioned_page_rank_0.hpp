@@ -236,7 +236,7 @@ namespace nw::graph {
       //  std::cout << "Node " << i << " : " << page_rank[i] << std::endl;
       //}
 
-      errors = partitioned_algorithm<detail::page_rank_0<Real>>(
+      errors = partitioned_segmented_algorithm<detail::page_rank_0<Real>>(
         hpx::execution::seq, G, hpx::ref(page_rank), hpx::ref(accum), hpx::ref(degrees), base_score,
         damping_factor);
 

@@ -247,7 +247,7 @@ namespace nw::graph {
       // }
 
 
-      auto errors = partitioned_algorithm<detail::page_rank_1<Real>>(
+      auto errors = partitioned_segmented_algorithm<detail::page_rank_1<Real>>(
         hpx::execution::seq, G, hpx::ref(page_rank), hpx::ref(accummulating_contributions),
         hpx::ref(degrees), base_score, damping_factor, batchsize);
 
