@@ -40,8 +40,8 @@ TEST_CASE("partitioned adj (compressed)  I/O", "[partitioned_compressed_io]") {
     auto A_local = adjacency<0>(A_local_edges);
 
     
-    std::string A_bin_file = partitioned_serialize_adj(DATA_DIR "karate.mtx");
-    partitioned_adjacency A = partitioned_deserialize_adj(A_bin_file);
+    std::string A_bin_file = partitioned_serialize_adj<0, directedness::directed>(DATA_DIR "karate.mtx");
+    partitioned_adjacency A = partitioned_deserialize_adj<0, directedness::directed>(A_bin_file);
 
     REQUIRE(num_vertices(A) == num_vertices(A_local));
     REQUIRE(A.num_edges() == A_local.num_edges());
@@ -50,6 +50,22 @@ TEST_CASE("partitioned adj (compressed)  I/O", "[partitioned_compressed_io]") {
       REQUIRE(contains(A_local, u, v));
     }
 
+  }
+  SECTION("I/O preserves adjacency<1> directed semantics") {
+    REQUIRE_THROWS_AS(
+      (partitioned_serialize_adj<1, directedness::directed>(DATA_DIR "karate.mtx")),
+      std::logic_error);
+    REQUIRE_THROWS_AS(
+      (partitioned_deserialize_adj<1, directedness::directed>(DATA_DIR "karate.mtx")),
+      std::logic_error);
+  }
+  SECTION("I/O preserves undirected adjacency semantics") {
+    REQUIRE_THROWS_AS(
+      (partitioned_serialize_adj<0, directedness::undirected>(DATA_DIR "karate.mtx")),
+      std::logic_error);
+    REQUIRE_THROWS_AS(
+      (partitioned_deserialize_adj<0, directedness::undirected>(DATA_DIR "karate.mtx")),
+      std::logic_error);
   }
   //SECTION("I/O (read pattern symmetric to edge_list and convert to compressed graph)") {
   //  auto A = read_mm<directedness::directed>(DATA_DIR "karate.mtx");

@@ -91,7 +91,7 @@ int hpx_main(int argc, char* argv[]) {
                                                       : hpx::get_num_localities(hpx::launch::sync);
   long batchsize = args["--batchsize"].asLong() ? args["--batchsize"].asLong() : 10000;
 
-  auto graph = load_partitioned_adjacency_graph(file);
+  auto graph = load_partitioned_adjacency_graph<0, directedness::directed>(file);
 
   if (verbose) {
     graph.stream_stats();

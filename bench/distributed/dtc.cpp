@@ -238,7 +238,7 @@ void run_bench(int argc, char* argv[]) {
 
     auto el_a = load_binary_graph<nw::graph::directedness::undirected>(file);
 
-    partitioned_adjacency G = load_partitioned_adjacency_graph(file);
+    partitioned_adjacency G = load_partitioned_adjacency_graph<0, directedness::directed>(file);
 
     auto degree = degrees(el_a);
 

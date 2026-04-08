@@ -60,6 +60,7 @@ usage_example::graph_type make_partitioned_neighbor_graph() {
   std::vector<hpx::id_type> localities(2, hpx::find_here());
   usage_example::graph_type G(
     4u, hpx::explicit_container_layout(std::vector<std::size_t>{2u, 2u}, localities));
+  G.register_as("partitioned_range_neighbor_graph");
 
   G[0] = usage_example::neighbor_list{1u, 2u};
   G[1] = usage_example::neighbor_list{0u, 2u};

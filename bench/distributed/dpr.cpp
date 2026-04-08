@@ -116,7 +116,7 @@ int hpx_main(int argc, char* argv[]) {
 
   for (auto&& file : files) {
 
-    partitioned_adjacency graph = load_partitioned_adjacency_graph(file);
+    partitioned_adjacency graph = load_partitioned_adjacency_graph<0, directedness::directed>(file);
 
     using vertex_id_type = typename decltype(graph)::vertex_id_type;
 

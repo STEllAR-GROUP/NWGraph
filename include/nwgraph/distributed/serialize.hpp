@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <numeric>
+#include <stdexcept>
 
 #include "nwgraph/adjacency.hpp"
 #include "nwgraph/distributed/algorithms/algorithm.hpp"
@@ -55,7 +56,8 @@ namespace nw::graph {
      * Additionally, the vertex id cannot directly be used as an index into the
      * "indices" array, but must be offset by the minimum vertex id in the part.
      */
-    auto compress_part(edge_list<directedness::undirected>& A, size_t idx_start, size_t n_vertices) {
+    template <directedness dir>
+    auto compress_part(edge_list<dir>& A, size_t idx_start, size_t n_vertices) {
 
       size_t n_edges = A.size();
 
@@ -184,80 +186,104 @@ namespace nw::graph {
   } // namespace detail
 
 
-  /* Serializes the adjacency of an undirected graph stored in a Matrix Market file into a binary
-     (.adj) file. The parameter max_part_size allows processing graphs that do not fit in
-     memory, loading and processing the graph in multiple partial passes.
+  /* Serializes a partitioned adjacency while preserving the old bounded-memory
+     streaming structure. At present only adjacency<0> with directed semantics
+     is implemented.
   */
+  template <int idx, directedness dir>
   std::string partitioned_serialize_adj(std::string mtx_file, size_t max_part_size = 2 << 26) {
 
-    std::string file_name = detail::get_adj_filename(mtx_file);
+    if constexpr (idx != 0 || dir != directedness::directed) {
+      throw std::logic_error(
+        "partitioned_serialize_adj only supports adjacency<0> with directed semantics");
+    } else {
 
-    if (std::filesystem::exists(file_name)) {
-      std::cout << "Adjacency file already exists, ";
-      // See if magic number matches
-      std::ifstream f(file_name);
-      char magic[30];
-      f.read(magic, sizeof(magic));
-      if (strncmp(magic, "NWGRAPH ADJACENCY BINARY FILE", sizeof(magic)) == 0) {
-        std::cout << "skipping serialization." << std::endl;
-        return file_name;
+      std::string file_name = detail::get_adj_filename(mtx_file);
+
+      if (std::filesystem::exists(file_name)) {
+        std::cout << "Adjacency file already exists, ";
+        // See if magic number matches
+        std::ifstream f(file_name);
+        char magic[30];
+        f.read(magic, sizeof(magic));
+        if (strncmp(magic, "NWGRAPH ADJACENCY BINARY FILE", sizeof(magic)) == 0) {
+          std::cout << "skipping serialization." << std::endl;
+          return file_name;
+        }
+        std::cout << "but is invalid, overwriting." << std::endl;
       }
-      std::cout << "but is invalid, overwriting." << std::endl;
+
+      std::ifstream in_stream(mtx_file);
+      auto [n_vertices, _, unused_n_edges] = read_mm_metadata(in_stream);
+      (void)unused_n_edges;
+      size_t n_parts = (n_vertices + max_part_size - 1) / max_part_size;
+      auto part_sizes = detail::partitioned_vertex_sizes(n_parts, n_vertices);
+
+      // The Matrix Market header reports raw stored entries, but the directed
+      // NWGraph read path can expand symmetric off-diagonal entries into both
+      // directions. We therefore do a first streamed pass to count the actual
+      // number of adjacency entries that will be written to the .adj file.
+      size_t n_edges = 0;
+      size_t idx_start = 0;
+      for (size_t part_size : part_sizes) {
+        in_stream = std::ifstream(mtx_file);
+
+        size_t idx_end = idx_start + part_size;
+        auto pred = [idx_start, idx_end](auto&& d0, auto&& d1)
+        { return d0 >= idx_start && d0 < idx_end; };
+
+        auto edgelist = read_mm<decltype(pred), directedness::directed>(in_stream, pred);
+        n_edges += edgelist.size();
+        idx_start = idx_end;
+      }
+
+      // Create adjacency writer
+      using adj_writer_t = detail::adj_writer<default_index_t, default_vertex_id_type>;
+      adj_writer_t writer(file_name, n_vertices, n_edges);
+
+      idx_start = 0;
+      size_t offs_indices = 0; // Offset for indices
+      for (size_t part_size : part_sizes) {
+
+        in_stream = std::ifstream(mtx_file);
+
+        // Read through the whole file, but only keeps edges whose source index is within the range
+        size_t idx_end = idx_start + part_size;
+        auto pred = [idx_start, idx_end](auto&& d0, auto&& d1)
+        { return d0 >= idx_start && d0 < idx_end; };
+
+        auto edgelist = read_mm<decltype(pred), directedness::directed>(in_stream, pred);
+
+        // Create partial adjacency
+        auto [indices, to_be_indexed] = detail::compress_part(edgelist, idx_start, part_size);
+
+        // Offset indices so that they are correct in the global context
+        std::for_each(indices.begin(), indices.end(),
+                      [offs_indices](auto& offset) { offset += offs_indices; });
+
+        // Write parts to file
+        writer.write_next(indices, to_be_indexed);
+
+        // Update for next part
+        offs_indices += to_be_indexed.size();
+        idx_start = idx_end;
+      }
+
+      // Write final idx, which should point past the last element
+      std::vector<default_index_t> final_idx = {(default_index_t)(n_edges)};
+      std::vector<default_vertex_id_type> empty;
+      writer.write_next(final_idx, empty);
+
+      if (!writer.is_complete()) {
+        std::cerr << "Error: Incomplete adjacency file written." << std::endl;
+        exit(1);
+      }
+
+      size_t total_size = std::filesystem::file_size(file_name);
+      std::cout << "Adjacency file serialized successfully." << std::endl;
+      std::cout << "File size: " << total_size << " bytes." << std::endl;
+      return file_name;
     }
-
-    // Get matrix size
-    std::ifstream in_stream(mtx_file);
-    auto [n_vertices, _, n_edges] = read_mm_metadata(in_stream);
-    size_t n_parts = (n_vertices + max_part_size - 1) / max_part_size;
-    auto part_sizes = detail::partitioned_vertex_sizes(n_parts, n_vertices);
-
-    // Create adjacency writer
-    using adj_writer_t = detail::adj_writer<default_index_t, default_vertex_id_type>;
-    adj_writer_t writer(file_name, n_vertices, n_edges);
-
-    size_t idx_start = 0;
-    size_t offs_indices = 0; // Offset for indices
-    for (size_t part_size : part_sizes) {
-
-      in_stream = std::ifstream(mtx_file);
-
-      // Read through the whole file, but only keeps edges whose source index is within the range
-      size_t idx_end = idx_start + part_size;
-      auto pred = [idx_start, idx_end](auto&& d0, auto&& d1, auto&& v)
-      { return d0 >= idx_start && d0 < idx_end; };
-
-      auto edgelist = read_mm<decltype(pred), directedness::undirected>(in_stream, pred);
-
-      // Create partial adjacency
-      auto [indices, to_be_indexed] = detail::compress_part(edgelist, idx_start, part_size);
-
-      // Offset indices so that they are correct in the global context
-      std::for_each(indices.begin(), indices.end(),
-                    [offs_indices](auto& idx) { idx += offs_indices; });
-
-
-      // Write parts to file
-      writer.write_next(indices, to_be_indexed);
-
-      // Update for next part
-      offs_indices += to_be_indexed.size();
-      idx_start = idx_end;
-    }
-
-    // Write final idx, which should point past the last element
-    std::vector<default_index_t> final_idx = {(default_index_t)(n_edges)};
-    std::vector<default_vertex_id_type> empty;
-    writer.write_next(final_idx, empty);
-
-    if (!writer.is_complete()) {
-      std::cerr << "Error: Incomplete adjacency file written." << std::endl;
-      exit(1);
-    }
-
-    size_t total_size = std::filesystem::file_size(file_name);
-    std::cout << "Adjacency file serialized successfully." << std::endl;
-    std::cout << "File size: " << total_size << " bytes." << std::endl;
-    return file_name;
   }
 
 
@@ -378,26 +404,34 @@ namespace nw::graph {
   } // namespace detail
 
 
+  template <int idx, directedness dir>
   auto partitioned_deserialize_adj(std::string mtx_file) {
 
-    std::string file_name = detail::get_adj_filename(mtx_file);
-    using reader_t = detail::adj_reader<default_index_t, default_vertex_id_type>;
-    reader_t reader(file_name);
+    if constexpr (idx != 0 || dir != directedness::directed) {
+      throw std::logic_error(
+        "partitioned_deserialize_adj only supports adjacency<0> with directed semantics");
+    } else {
 
-    size_t n_vertices = reader.n_vertices();
-    size_t n_edges = reader.n_edges();
+      std::string file_name = detail::get_adj_filename(mtx_file);
+      using reader_t = detail::adj_reader<default_index_t, default_vertex_id_type>;
+      reader_t reader(file_name);
 
-    // construct partitioned adjacency graph
-    size_t n_localities = hpx::get_num_localities(hpx::launch::sync);
-    auto part_sizes = detail::partitioned_vertex_sizes(n_localities, n_vertices);
-    auto edge_sizes = reader.get_edge_sizes(part_sizes);
+      size_t n_vertices = reader.n_vertices();
+      size_t n_edges = reader.n_edges();
 
-    partitioned_adjacency<0> G(n_vertices, n_edges, part_sizes, edge_sizes, "pg",
-                               hpx::find_all_localities());
+      // construct partitioned adjacency graph
+      size_t n_localities = hpx::get_num_localities(hpx::launch::sync);
+      auto part_sizes = detail::partitioned_vertex_sizes(n_localities, n_vertices);
+      auto edge_sizes = reader.get_edge_sizes(part_sizes);
 
-    partitioned_algorithm<detail::read_partitioned_adj_part>(hpx::execution::seq, G, file_name);
+      partitioned_adjacency<0> G(n_vertices, n_edges, part_sizes, edge_sizes, "pg",
+                                 hpx::find_all_localities());
 
-    return G;
+      partitioned_algorithm<detail::read_partitioned_adj_part>(hpx::execution::seq, G,
+                                                               file_name);
+
+      return G;
+    }
   }
 
 
