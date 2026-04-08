@@ -18,12 +18,14 @@
 #error "This file requires using HPX as a backend for NWGraph"
 #endif
 
-#include "nwgraph/algorithms/partitioned_algorithm.hpp"
+#include "nwgraph/distributed/algorithms/algorithm.hpp"
+#include "nwgraph/distributed/copartitioned_vector.hpp"
 
 
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cmath>
 #include <map>
 #include <vector>
 
@@ -38,14 +40,15 @@ namespace nw::graph {
 
   namespace detail {
 
+    namespace page_rank_4_impl {
+
 
     template <typename Graph, typename Real>
     using remote_results_type =
       std::vector<std::tuple<vertex_id_t<std::remove_reference_t<Graph>>, Real>>;
 
-    template <typename Graph, typename Partition, typename Real>
+    template <typename Graph, typename Real>
     static remote_results_type<Graph, Real> do_page_rank_packet_4(
-      Partition partition,
       std::vector<std::tuple<vertex_id_t<std::remove_reference_t<Graph>>,
                              vertex_id_t<std::remove_reference_t<Graph>>>>&& incoming_packet,
       hpx::partitioned_vector<Real> page_rank,
@@ -53,48 +56,43 @@ namespace nw::graph {
 
       hpx::scoped_annotation ann_pr_handle_packet("PR_handle_packet");
 
-      decltype(auto) pr_data = detail::partition_data(page_rank, partition);
-      decltype(auto) degrees_data = detail::partition_data(degrees, partition);
-
       remote_results_type<Graph, Real> results;
       results.reserve(incoming_packet.size());
       for (auto&& [v_dest, v_asked] : incoming_packet) {
-        if (degrees_data[v_asked] != 0) {
-          Real outgoing_contribution = pr_data[v_asked] / degrees_data[v_asked];
+        auto degree = *degrees.get_local_iterator(static_cast<std::size_t>(v_asked)).local();
+        if (degree != 0) {
+          auto rank = *page_rank.get_local_iterator(static_cast<std::size_t>(v_asked)).local();
+          Real outgoing_contribution = rank / degree;
           results.push_back(std::make_tuple(v_dest, outgoing_contribution));
         }
       }
       return results;
     }
 
-    template <typename Graph, typename Partition, typename Real>
+    template <typename Graph, typename Real>
     struct page_rank_action_4
-      : hpx::actions::action<decltype(&do_page_rank_packet_4<Graph, Partition, Real>),
-                             &do_page_rank_packet_4<Graph, Partition, Real>,
-                             page_rank_action_4<Graph, Partition, Real>> {
+      : hpx::actions::action<decltype(&do_page_rank_packet_4<Graph, Real>),
+                             &do_page_rank_packet_4<Graph, Real>,
+                             page_rank_action_4<Graph, Real>> {
     };
+
+    } // namespace page_rank_4_impl
 
     ////////////////////////////////////////////////////////////////////////////
     template <typename Real>
     struct page_rank_4 : hpx::parallel::detail::algorithm<page_rank_4<Real>, Real> {
-      static constexpr bool partition_aware = true;
-
       // page rank driver for one of the partitions
       constexpr page_rank_4() noexcept
         : hpx::parallel::detail::algorithm<page_rank_4, Real>("page_rank_4") {}
 
       template <typename ExPolicy, typename Graph>
-      static Real sequential(ExPolicy&& policy, Graph G, partition_t<std::remove_reference_t<Graph>> this_partition,
+      static Real sequential(ExPolicy&& policy, Graph G, const size_t first_index,
+                             const size_t last_index,
                              hpx::partitioned_vector<Real> page_rank_pv,
                              hpx::partitioned_vector<Real> accum_pv,
                              hpx::partitioned_vector<vertex_id_t<std::remove_reference_t<Graph>>> degrees_pv, Real base_score,
                              Real damping_factor, size_t batchsize) {
         hpx::scoped_annotation ann_pr_impl("PR_impl");
-
-        decltype(auto) G_data = detail::partition_data(G, this_partition);
-        decltype(auto) page_rank_data = detail::partition_data(page_rank_pv, this_partition);
-        decltype(auto) degrees_data = detail::partition_data(degrees_pv, this_partition);
-        decltype(auto) accum_data = detail::partition_data(accum_pv, this_partition);
 
         // Compute one Page-Rank iteration
         // For each local node, do:
@@ -113,22 +111,27 @@ namespace nw::graph {
         using graph_type = std::remove_reference_t<Graph>;
         using vertex_id_type = vertex_id_t<graph_type>;
         using partition_type = partition_t<graph_type>;
-        auto first_index = static_cast<vertex_id_type>(partition_first_index(this_partition));
-        auto last_index = static_cast<vertex_id_type>(partition_last_index(this_partition));
+        auto first_vertex = static_cast<vertex_id_type>(first_index);
+        auto last_vertex = static_cast<vertex_id_type>(last_index);
+
+        auto rank_first = page_rank_pv.get_local_iterator(first_index).local();
+        auto accum_first = accum_pv.get_local_iterator(first_index).local();
+        auto degree_first = degrees_pv.get_local_iterator(first_index).local();
 
         auto send_remote_action = [&](partition_type const& target_partition,
                                       auto&& targets) -> hpx::future<void>
         {
-          using action_t = page_rank_action_4<graph_type, partition_type, Real>;
+          using action_t = detail::page_rank_4_impl::page_rank_action_4<graph_type, Real>;
 
           auto f1 = hpx::async<action_t>(
-            partition_locality(target_partition), target_partition, std::move(targets),
+            static_cast<hpx::id_type>(target_partition), std::move(targets),
             hpx::ref(page_rank_pv), hpx::ref(degrees_pv));
           return f1.then(
             [&](auto&& f)
             {
               for (auto&& [v, incoming_val] : f.get()) {
-                std::atomic_ref(accum_data[v]) += incoming_val;
+                auto& accum = *(accum_pv.get_local_iterator(static_cast<std::size_t>(v)).local());
+                std::atomic_ref(accum) += incoming_val;
               }
             });
         };
@@ -145,19 +148,25 @@ namespace nw::graph {
 
         hpx::experimental::for_loop(
           hpx::execution::par,
-          first_index,
-          last_index,
+          first_vertex,
+          last_vertex,
           [&](vertex_id_type u)
                       {
                         auto* thd_outgoing_packets = &(outgoing_packets.get());
-                        auto edge_rng = detail::iterable_row(G_data[u]);
+                        auto edge_rng = G[u];
+                        auto u_offset = static_cast<std::size_t>(u - first_vertex);
 
                         for (auto&& edge : edge_rng) {
-                          vertex_id_type v = detail::edge_target(G_data, edge);
+                          vertex_id_type v = static_cast<vertex_id_type>(target(G, edge));
 
-                          if (is_local(this_partition, v)) {
-                            if (degrees_data[v] != 0)
-                              std::atomic_ref(accum_data[u]) += page_rank_data[v] / degrees_data[v];
+                          if (first_vertex <= v && v < last_vertex) {
+                            auto v_offset = static_cast<std::size_t>(v - first_vertex);
+                            auto& degree = *(degree_first + v_offset);
+                            if (degree != 0) {
+                              auto& rank = *(rank_first + v_offset);
+                              auto& accum = *(accum_first + u_offset);
+                              std::atomic_ref(accum) += rank / degree;
+                            }
                           }
                           else {
                             auto target_partition = vertex_partition(G, v);
@@ -211,17 +220,20 @@ namespace nw::graph {
 
           hpx::experimental::for_loop(
                                       hpx::execution::par,
-                                      first_index,
-                                      last_index,
+                                      first_vertex,
+                                      last_vertex,
                                       hpx::experimental::reduction_plus(error),
                                       [&](vertex_id_type u, auto& local_error)
                                       {
-                                        Real old_rank = page_rank_data[u];
-                                        Real new_rank = base_score + damping_factor * accum_data[u];
+                                        auto offset = static_cast<std::size_t>(u - first_vertex);
+                                        auto& rank = *(rank_first + offset);
+                                        auto& accum = *(accum_first + offset);
+                                        Real old_rank = rank;
+                                        Real new_rank = base_score + damping_factor * accum;
 
-                                        page_rank_data[u] = new_rank;
+                                        rank = new_rank;
                                         local_error += fabs(new_rank - old_rank);
-                                        accum_data[u] = 0.0;
+                                        accum = 0.0;
                                       });
         }
 

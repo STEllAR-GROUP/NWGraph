@@ -20,7 +20,7 @@
 #error "This file requires using HPX as a backend for NWGraph"
 #endif
 
-#include "nwgraph/algorithms/partitioned_algorithm.hpp"
+#include "nwgraph/distributed/algorithms/algorithm.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -227,10 +227,10 @@ namespace nw::graph {
 
     for (size_t i = 0; i < max_iters; i++) {
 
-      partitioned_segmented_algorithm<detail::page_rank_0>(
+      partitioned_algorithm<detail::page_rank_0>(
         hpx::execution::seq, G, hpx::ref(page_rank), hpx::ref(page_rank_accum), hpx::ref(degrees));
 
-      auto errors = partitioned_segmented_algorithm<detail::page_rank_reduce<Real>>(
+      auto errors = partitioned_algorithm<detail::page_rank_reduce<Real>>(
         hpx::execution::seq, G, hpx::ref(page_rank), hpx::ref(page_rank_accum), base_score,
         damping_factor);
 

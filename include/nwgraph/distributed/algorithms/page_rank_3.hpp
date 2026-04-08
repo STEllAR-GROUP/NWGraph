@@ -18,7 +18,7 @@
 #error "This file requires using HPX as a backend for NWGraph"
 #endif
 
-#include "nwgraph/algorithms/partitioned_algorithm.hpp"
+#include "nwgraph/distributed/algorithms/algorithm.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -35,6 +35,8 @@
 namespace nw::graph {
 
   namespace detail {
+
+    namespace page_rank_3_impl {
 
 
     template <typename Graph, typename Real>
@@ -142,10 +144,11 @@ namespace nw::graph {
             //auto ac_iter = accumulated_contributions.get_local_iterator(u).local();
 
             // For each neighbor of u
-            for (auto&& elt : G[u]) {
+            auto edge_rng = G[u];
+            for (auto&& elt : edge_rng) {
                 
-                idx_t v = target(G, elt);
-                auto v_locality = vertex_locality(G, v);
+              idx_t v = static_cast<idx_t>(target(G, elt));
+              auto v_locality = nw::graph::detail::vertex_locality(G, v);
                 if (v_locality == this_locality) {
                   auto& ac_iter = std::get<0>(tl_iters.get()); //+ (u - first_index);
                   ac_iter += (u - first_index);
@@ -234,6 +237,8 @@ namespace nw::graph {
       }
     };
 
+    } // namespace page_rank_3_impl
+
 
     /// \endcond
   } // namespace detail
@@ -278,7 +283,7 @@ namespace nw::graph {
       //  std::cout << "Node " << i << " : " << page_rank[i] << std::endl;
       //}
 
-      errors = partitioned_segmented_algorithm<detail::page_rank_3<Real>>(
+      errors = partitioned_algorithm<detail::page_rank_3_impl::page_rank_3<Real>>(
         hpx::execution::seq, G, hpx::ref(page_rank), hpx::ref(accum), hpx::ref(degrees), base_score,
         damping_factor, batchsize);
 

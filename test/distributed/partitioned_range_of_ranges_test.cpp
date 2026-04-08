@@ -6,7 +6,7 @@
 
 #include <hpx/include/partitioned_vector.hpp>
 
-#include "nwgraph/partition.hpp"
+#include "nwgraph/distributed/adjacency.hpp"
 
 using registered_neighbors = std::vector<nw::graph::default_vertex_id_type>;
 HPX_REGISTER_PARTITIONED_VECTOR(registered_neighbors)
@@ -19,61 +19,26 @@ using neighbor_list = std::vector<default_vertex_id_type>;
 
 using graph_type = hpx::partitioned_vector<neighbor_list>;
 
-struct simple_partition {
-  hpx::id_type locality;
-  std::size_t first = 0;
-  std::size_t last = 0;
-
-  auto operator<=>(simple_partition const&) const = default;
-
-  template <typename Archive>
-  void serialize(Archive& ar, unsigned) {
-    ar& locality& first& last;
-  }
-};
-
-inline hpx::id_type tag_invoke(nw::graph::partition_locality_tag,
-                               simple_partition const& partition) {
-  return partition.locality;
-}
-
-inline std::size_t tag_invoke(nw::graph::partition_first_index_tag,
-                              simple_partition const& partition) {
-  return partition.first;
-}
-
-inline std::size_t tag_invoke(nw::graph::partition_last_index_tag,
-                              simple_partition const& partition) {
-  return partition.last;
-}
-
 } // namespace usage_example
 
 namespace hpx {
 
-auto tag_invoke(nw::graph::partitions_tag, usage_example::graph_type const& G) {
-  std::vector<usage_example::simple_partition> result;
-  auto partition = G.segment_begin();
-  auto partition_end = G.segment_end();
-  for (; partition != partition_end; ++partition) {
-    auto locality = hpx::naming::get_locality_from_id(partition->get_id());
-    auto first_index = static_cast<std::size_t>(partition->first_);
-    auto last_index = static_cast<std::size_t>(partition->first_ + partition->size_);
-    last_index = std::min(last_index, static_cast<std::size_t>(G.size()));
-    result.push_back({HPX_MOVE(locality), first_index, last_index});
-  }
-  return result;
+hpx::id_type tag_invoke(nw::graph::vertex_partition_tag,
+                        usage_example::graph_type const& G,
+                        nw::graph::default_vertex_id_type v) {
+  auto partition = G.get_segment_iterator(static_cast<std::size_t>(v));
+  return hpx::naming::get_locality_from_id(partition->get_id());
 }
 
-usage_example::simple_partition tag_invoke(nw::graph::vertex_partition_tag,
-                                           usage_example::graph_type const& G,
-                                           nw::graph::default_vertex_id_type v) {
-  auto partition = G.get_segment_iterator(static_cast<std::size_t>(v));
-  auto locality = hpx::naming::get_locality_from_id(partition->get_id());
-  auto first_index = static_cast<std::size_t>(partition->first_);
-  auto last_index = static_cast<std::size_t>(partition->first_ + partition->size_);
-  last_index = std::min(last_index, static_cast<std::size_t>(G.size()));
-  return {HPX_MOVE(locality), first_index, last_index};
+nw::graph::default_vertex_id_type tag_invoke(nw::graph::target_tag,
+                                             usage_example::graph_type const&,
+                                             nw::graph::default_vertex_id_type v) {
+  return v;
+}
+
+nw::graph::default_vertex_id_type tag_invoke(nw::graph::num_vertices_tag,
+                                             usage_example::graph_type const& G) {
+  return static_cast<nw::graph::default_vertex_id_type>(G.size());
 }
 
 } // namespace hpx
@@ -87,11 +52,11 @@ struct graph_traits<usage_example::graph_type> {
 
 } // namespace nw::graph
 
-#include "nwgraph/algorithms/partitioned_util.hpp"
+#include "nwgraph/distributed/algorithms/util.hpp"
 
 namespace {
 
-usage_example::graph_type make_partitioned_row_graph() {
+usage_example::graph_type make_partitioned_neighbor_graph() {
   std::vector<hpx::id_type> localities(2, hpx::find_here());
   usage_example::graph_type G(
     4u, hpx::explicit_container_layout(std::vector<std::size_t>{2u, 2u}, localities));
@@ -107,10 +72,12 @@ usage_example::graph_type make_partitioned_row_graph() {
 template <typename Graph>
 std::vector<vertex_id_t<std::remove_reference_t<Graph>>> targets_of(
   Graph& G, vertex_id_t<std::remove_reference_t<Graph>> u) {
+  using graph_type = std::remove_reference_t<Graph>;
+  using neighborhood_type = inner_range_t<graph_type>;
   std::vector<vertex_id_t<std::remove_reference_t<Graph>>> result;
-  auto row = static_cast<usage_example::neighbor_list>(G[u]);
-  for (auto&& edge : row) {
-    result.push_back(edge);
+  neighborhood_type neighborhood = G[u];
+  for (auto&& edge : neighborhood) {
+    result.push_back(target(G, edge));
   }
   return result;
 }
@@ -119,22 +86,26 @@ std::vector<vertex_id_t<std::remove_reference_t<Graph>>> targets_of(
 
 TEST_CASE("partitioned algorithms accept a partitioned_vector range-of-ranges graph",
           "[distributed][partitioned][concepts][smoke]") {
-  static_assert(partition_token<usage_example::simple_partition>);
+  static_assert(graph<usage_example::graph_type>);
   static_assert(partitioned_graph<usage_example::graph_type>);
   static_assert(partitioned_algorithm_graph<usage_example::graph_type>);
-  static_assert(std::same_as<partition_t<usage_example::graph_type>, usage_example::simple_partition>);
+  static_assert(std::same_as<partition_t<usage_example::graph_type>, hpx::id_type>);
 
-  auto G = make_partitioned_row_graph();
+  auto G = make_partitioned_neighbor_graph();
 
   // This example starts from hpx::partitioned_vector<std::vector<vertex>>.
-  // The only distributed customization points it provides are partitions(G)
-  // and vertex_partition(G, v); no custom graph local_view adapter is required.
-  auto graph_partitions = partitions(G);
-  REQUIRE(graph_partitions.size() == 2u);
-  REQUIRE(vertex_partition(G, 0u) == graph_partitions[0]);
-  REQUIRE(vertex_partition(G, 3u) == graph_partitions[1]);
-  REQUIRE(is_local(graph_partitions[0], 0u));
-  REQUIRE_FALSE(is_local(graph_partitions[0], 2u));
+  // The only distributed customization point it provides is vertex_partition(G, v),
+  // which yields the HPX dispatch target directly.
+  REQUIRE(vertex_partition(G, 0u) == hpx::find_here());
+  REQUIRE(vertex_partition(G, 3u) == hpx::find_here());
+  auto segments = partition_segments(G);
+  REQUIRE(segments.size() == 2u);
+  REQUIRE(segments[0].first == 0u);
+  REQUIRE(segments[0].last == 2u);
+  REQUIRE(segments[1].first == 2u);
+  REQUIRE(segments[1].last == 4u);
+  REQUIRE(is_local(G, 0u));
+  REQUIRE(is_local(G, 2u));
   REQUIRE(targets_of(G, 0u) == (std::vector<default_vertex_id_type>{1u, 2u}));
   REQUIRE(targets_of(G, 2u) == (std::vector<default_vertex_id_type>{0u, 1u, 3u}));
 

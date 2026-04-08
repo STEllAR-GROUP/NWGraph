@@ -34,9 +34,10 @@
 #include <tbb/global_control.h>
 #endif
 #if NWGRAPH_HAVE_HPX
-#include <nwgraph/util/partitioned_serialize.hpp>
-#include <nwgraph/partitioned_adjacency.hpp>
 #include <hpx/algorithm.hpp>
+#include <hpx/include/partitioned_vector_predef.hpp>
+
+#include "nwgraph/distributed/algorithms/util.hpp"
 #endif
 
 #include <tuple>
@@ -141,14 +142,6 @@ edge_list<Directedness, Attributes...> load_binary_graph(std::string file) {
   return el;
 }
 
-//template <int idx, typename... Attributes>
-//partitioned_adjacency<idx, Attributes...> 
-auto load_partitioned_adjacency_graph(std::string mtx_file) {
-  nw::util::life_timer _(__func__);
-  std::string b_adj_file = partitioned_serialize_adj(mtx_file);
-  return partitioned_deserialize_adj(b_adj_file);
-}
-
 template <int Adj, class ExecutionPolicy = std::execution::parallel_unsequenced_policy, directedness Directedness, class... Attributes>
 adjacency<Adj, Attributes...> build_adjacency(edge_list<Directedness, Attributes...>& graph, bool sort_adjacency = false, ExecutionPolicy&& policy = ExecutionPolicy()) {
   nw::util::life_timer _("build adjacency");
@@ -189,16 +182,44 @@ auto build_random_sources(const Graph& graph, size_t n, long seed) {
   using Id = typename nw::graph::vertex_id_t<std::decay_t<Graph>>;
 
   auto sources = std::vector<Id>(n);
-  auto degrees = build_degrees(graph);
   auto gen     = std::mt19937(seed);
-  auto dis     = std::uniform_int_distribution<Id>(0, num_vertices(graph));
+  auto dis     = std::uniform_int_distribution<Id>(0, num_vertices(graph) - 1);
 
   for (auto& id : sources) {
-    for (id = dis(gen); degrees[id] == 0; id = dis(gen)) {
+    for (id = dis(gen); degree(graph, id) == 0; id = dis(gen)) {
     }
   }
   return sources;
 }
+
+#if NWGRAPH_HAVE_HPX
+template <partitioned_algorithm_graph Graph>
+auto build_random_sources(Graph& graph, size_t n, long seed) {
+  using Id = typename nw::graph::vertex_id_t<std::remove_reference_t<Graph>>;
+  using traits = hpx::traits::segmented_iterator_traits<decltype(std::declval<hpx::partitioned_vector<Id>&>().begin())>;
+
+  auto sources = std::vector<Id>(n);
+  auto degrees = partitioned_row_degrees(graph);
+
+  std::vector<Id> local_degrees;
+  local_degrees.reserve(degrees.size());
+
+  std::size_t num_partitions = traits::segment(degrees.end()) - traits::segment(degrees.begin());
+  for (std::size_t part = 0; part != num_partitions; ++part) {
+    auto values = degrees.get_values(hpx::launch::sync, part);
+    std::move(values.begin(), values.end(), std::back_inserter(local_degrees));
+  }
+
+  auto gen = std::mt19937(seed);
+  auto dis = std::uniform_int_distribution<Id>(0, num_vertices(graph) - 1);
+
+  for (auto& id : sources) {
+    for (id = dis(gen); local_degrees[id] == 0; id = dis(gen)) {
+    }
+  }
+  return sources;
+}
+#endif
 
 /// Load a set of vertices from a file.
 ///

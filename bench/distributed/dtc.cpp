@@ -55,12 +55,13 @@ static constexpr char USAGE[] =
 #include <filesystem>
 #include <tuple>
 #include "common.hpp"
-#include "nwgraph/algorithms/partitioned_triangle_count_0.hpp"
-#include "nwgraph/algorithms/partitioned_triangle_count_1.hpp"
-#include "nwgraph/algorithms/partitioned_triangle_count_2.hpp"
-#include "nwgraph/algorithms/partitioned_triangle_count_3.hpp"
-#include "nwgraph/algorithms/partitioned_triangle_count_4.hpp"
-#include "nwgraph/partitioned_adjacency.hpp"
+#include "nwgraph/distributed/adjacency.hpp"
+
+#include <nwgraph/distributed/algorithms/triangle_count_0.hpp>
+#include <nwgraph/distributed/algorithms/triangle_count_1.hpp>
+#include <nwgraph/distributed/algorithms/triangle_count_2.hpp>
+#include <nwgraph/distributed/algorithms/triangle_count_3.hpp>
+#include <nwgraph/distributed/algorithms/triangle_count_4.hpp>
 
 #include <date/date.h>
 #include "config.h"
@@ -68,8 +69,8 @@ static constexpr char USAGE[] =
 #include <nlohmann/json.hpp>
 
 #include <hpx/include/partitioned_vector.hpp>
-#include <nwgraph/partitioned_build.hpp>
-#include <nwgraph/util/partitioned_serialize.hpp>
+#include <nwgraph/distributed/build.hpp>
+#include <nwgraph/distributed/serialize.hpp>
 
 using unsigned_int = unsigned int;
 HPX_REGISTER_PARTITIONED_VECTOR(unsigned_int)
@@ -320,62 +321,19 @@ void run_bench(int argc, char* argv[]) {
               switch (id) {
               case 0:
                 return triangle_count(cel_a);
-
               case 1:
                 return partitioned_triangle_count_0(cel_a);
-
               case 2:
                 return partitioned_triangle_count_1(cel_a);
-
               case 3:
                 return partitioned_triangle_count_2(cel_a);
-
               case 4:
                 return partitioned_triangle_count_3(cel_a, batchsize);
               case 5:
                 return partitioned_triangle_count_4(cel_a, batchsize);
-#if 0
-              case 1:
-                return triangle_count_v1(cel_a);
-              case 2:
-                return triangle_count_v2(cel_a);
-              case 3:
-                return triangle_count_v3(cel_a);
-              case 4:
-                return triangle_count(cel_a, thread);
-               case 5:
-                 return triangle_count_v5(cel_a.begin(), cel_a.end(), thread);
-               case 6:
-                 return triangle_count_v6(cel_a.begin(), cel_a.end(), thread);
-               case 7:
-                 return triangle_count_v7(cel_a);
-               case 8:
-                 return triangle_count_v7(cel_a, std::execution::seq, std::execution::par_unseq);
-               case 9:
-                 return triangle_count_v7(cel_a, std::execution::par_unseq, std::execution::par_unseq);
-               case 10:
-                 return triangle_count_v10(cel_a);
-               case 11:
-                 return triangle_count_v10(cel_a, std::execution::par_unseq, std::execution::par_unseq, std::execution::par_unseq);
-               case 12:
-                 return triangle_count_v12(cel_a, thread);
-               case 13:
-                 return triangle_count_v13(cel_a, thread);
-               case 14:
-                 return triangle_count_v14(cel_a);
-               case 15:
-                 return triangle_count_edgesplit(cel_a, thread);
-               case 16:
-                 return triangle_count_edgesplit_upper(cel_a, thread);
-#ifdef ONE_DIMENSIONAL_EDGE
-               case 17:
-                 return triangle_count_edgerange(cel_a);
-               case 18:
-                 return triangle_count_edgerange_cyclic(cel_a, thread);
-#endif
-#endif
               default:
-                std::cerr << "Unknown version id " << id << "\n";
+                std::cerr << "Unsupported distributed triangle count version id " << id
+                          << "; available versions: 0, 1, 2, 3, 4, 5\n";
                 return 0ul;
               }
             });

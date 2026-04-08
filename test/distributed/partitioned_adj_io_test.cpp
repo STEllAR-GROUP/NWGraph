@@ -10,7 +10,7 @@
 
 #include "nwgraph/graph_concepts.hpp"
 #include "nwgraph/containers/aos.hpp"
-#include "nwgraph/util/partitioned_serialize.hpp"
+#include "nwgraph/distributed/serialize.hpp"
 
 // I don't like this being here
 using unsigned_int = unsigned int;
@@ -20,9 +20,9 @@ HPX_REGISTER_PARTITIONED_VECTOR(unsigned_int)
 using namespace nw::graph;
 using namespace nw::util;
 
-template <edge_list_graph Graph>
-bool contains(Graph graph, size_t u, size_t v) {
-  for (auto&& [x, y] : graph) {
+template <typename Graph>
+bool contains(Graph& graph, size_t u, size_t v) {
+  for (auto&& [x, y] : make_edge_range(graph)) {
     if (x == u && y == v) return true;
   }
   return false;
@@ -36,13 +36,14 @@ TEST_CASE("partitioned adj (compressed)  I/O", "[partitioned_compressed_io]") {
     //auto C = read_mm<directedness::directed>(DATA_DIR "USAir97.mtx");
     //auto D = read_mm<directedness::undirected>(DATA_DIR "USAir97.mtx");
 
-    auto A_local = read_mm<directedness::undirected>(DATA_DIR "karate.mtx");
+    auto A_local_edges = read_mm<directedness::directed>(DATA_DIR "karate.mtx");
+    auto A_local = adjacency<0>(A_local_edges);
 
     
     std::string A_bin_file = partitioned_serialize_adj(DATA_DIR "karate.mtx");
     partitioned_adjacency A = partitioned_deserialize_adj(A_bin_file);
 
-    REQUIRE(A.num_vertices() == A_local.num_vertices());
+    REQUIRE(num_vertices(A) == num_vertices(A_local));
     REQUIRE(A.num_edges() == A_local.num_edges());
 
     for (auto [u, v] : make_edge_range(A)) {

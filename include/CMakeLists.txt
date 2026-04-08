@@ -76,6 +76,27 @@ target_sources(nwgraph
   nwgraph/algorithms/prim.hpp
   nwgraph/algorithms/spMatspMat.hpp
   nwgraph/algorithms/triangle_count.hpp
+  nwgraph/distributed/adjacency.hpp
+  nwgraph/distributed/build.hpp
+  nwgraph/distributed/copartitioned_vector.hpp
+  nwgraph/distributed/graph.hpp
+  nwgraph/distributed/serialize.hpp
+  nwgraph/distributed/algorithms/algorithm.hpp
+  nwgraph/distributed/algorithms/bfs_1.hpp
+  nwgraph/distributed/algorithms/page_rank_0.hpp
+  nwgraph/distributed/algorithms/page_rank_1.hpp
+  nwgraph/distributed/algorithms/page_rank_2.hpp
+  nwgraph/distributed/algorithms/page_rank_3.hpp
+  nwgraph/distributed/algorithms/page_rank_4.hpp
+  nwgraph/distributed/algorithms/page_rank_b.hpp
+  nwgraph/distributed/algorithms/triangle_count_0.hpp
+  nwgraph/distributed/algorithms/triangle_count_1.hpp
+  nwgraph/distributed/algorithms/triangle_count_2.hpp
+  nwgraph/distributed/algorithms/triangle_count_3.hpp
+  nwgraph/distributed/algorithms/triangle_count_4.hpp
+  nwgraph/distributed/algorithms/util.hpp
+  nwgraph/distributed/containers/compressed.hpp
+  nwgraph/distributed/containers/soa.hpp
   nwgraph/experimental/algorithms/betweenness_centrality.hpp
   nwgraph/experimental/algorithms/bfs.hpp
   nwgraph/experimental/algorithms/connected_components.hpp

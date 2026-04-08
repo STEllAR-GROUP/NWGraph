@@ -41,19 +41,18 @@ static constexpr const char USAGE[] =
 #include "Log.hpp"
 #include "common.hpp"
 
-#include <nwgraph/util/partitioned_serialize.hpp>
-#include "nwgraph/algorithms/partitioned_page_rank_0.hpp"
-#include "nwgraph/algorithms/partitioned_page_rank_1.hpp"
-#include "nwgraph/algorithms/partitioned_page_rank_2.hpp"
-#include "nwgraph/algorithms/partitioned_page_rank_3.hpp"
-#include "nwgraph/algorithms/partitioned_page_rank_4.hpp"
-#include "nwgraph/algorithms/partitioned_util.hpp"
+#include <nwgraph/distributed/algorithms/page_rank_0.hpp>
+#include <nwgraph/distributed/algorithms/page_rank_1.hpp>
+#include <nwgraph/distributed/algorithms/page_rank_2.hpp>
+#include <nwgraph/distributed/algorithms/page_rank_3.hpp>
+#include <nwgraph/distributed/algorithms/page_rank_4.hpp>
+#include <nwgraph/distributed/serialize.hpp>
+#include "nwgraph/distributed/algorithms/util.hpp"
 #include "nwgraph/experimental/algorithms/page_rank.hpp"
-#include "nwgraph/partitioned_adjacency.hpp"
+#include "nwgraph/distributed/adjacency.hpp"
 
 
 #include <hpx/include/partitioned_vector.hpp>
-#include <nwgraph/partitioned_build.hpp>
 
 using unsigned_int = unsigned int;
 HPX_REGISTER_PARTITIONED_VECTOR(unsigned_int)
@@ -143,25 +142,23 @@ int hpx_main(int argc, char* argv[]) {
                 partitioned_page_rank_0(graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters);
                 break;
               case 1:
-                partitioned_page_rank_1(graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters,
-                                        batchsize);
+                partitioned_page_rank_1(
+                  graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters, batchsize);
                 break;
               case 2:
-                // This doesn't need a seperate degrees vector, because it assumes the inverse
-                // edge directionality, meaning that the out-degrees is the size of the adjacency
-                // list of each vertex.
                 partitioned_page_rank_2(graph, p_rankings, 0.85f, tolerance, max_iters);
                 break;
               case 3:
-                partitioned_page_rank_3(graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters,
-                                        batchsize);
+                partitioned_page_rank_3(
+                  graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters, batchsize);
                 break;
               case 4: 
-                  partitioned_page_rank_4(graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters,
-                                        batchsize);
+                partitioned_page_rank_4(
+                  graph, p_degrees, p_rankings, 0.85f, tolerance, max_iters, batchsize);
                 break;
               default:
-                std::cerr << "Unknown version id " << id << std::endl;
+                std::cerr << "Unsupported distributed PageRank version id " << id
+                          << "; available versions: 0, 1, 2, 3, 4" << std::endl;
                 break;
               }
             },

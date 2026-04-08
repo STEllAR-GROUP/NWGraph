@@ -4,7 +4,7 @@
 #include "nwgraph/edge_list.hpp"
 #include "nwgraph/graph_base.hpp"
 #include "nwgraph/io/mmio.hpp"
-#include "nwgraph/partitioned_adjacency.hpp"
+#include "nwgraph/distributed/adjacency.hpp"
 
 #include <hpx/hpx_init.hpp>
 

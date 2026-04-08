@@ -18,7 +18,7 @@
 #error "This file requires using HPX as a backend for NWGraph"
 #endif
 
-#include "nwgraph/algorithms/partitioned_algorithm.hpp"
+#include "nwgraph/distributed/algorithms/algorithm.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -40,6 +40,8 @@
 namespace nw::graph {
 
   namespace detail {
+
+    namespace page_rank_2_impl {
 
     template <typename Graph, typename Real>
     static void do_page_rank_packet_2(
@@ -118,14 +120,16 @@ namespace nw::graph {
         {
           hpx::scoped_annotation annotation("page_rank_2::compute_contributions");
           for (auto v_it = first; v_it != last; v_it++, from_pr_iter++) {
-            auto v_id = v_it.index();
             auto neighbour_range = *v_it;
-            auto out_degree = neighbour_range.size();
+            auto out_degree = std::ranges::size(neighbour_range);
+            if (out_degree == 0) {
+              continue;
+            }
             auto out_rank = damping_factor * (*from_pr_iter) / out_degree;
             // for each neighbour
             for (auto&& e : neighbour_range) {
-              auto v = target(G, e);
-              auto loc_id = vertex_locality(G, v);
+              auto v = static_cast<vertex_id_type>(target(G, e));
+              auto loc_id = nw::graph::detail::vertex_locality(G, v);
               if (loc_id == this_locality_id) {
                 // local contribution
                 auto local_it = to_page_rank.get_local_iterator(v).local();
@@ -196,6 +200,8 @@ namespace nw::graph {
       }
     };
 
+    } // namespace page_rank_2_impl
+
 
     /// \endcond
   } // namespace detail
@@ -229,7 +235,7 @@ namespace nw::graph {
 
     auto page_rank_iter = [&](auto&& from_pr, auto&& to_pr)
     {
-      return partitioned_segmented_algorithm<detail::page_rank_2<Real>>(
+      return partitioned_algorithm<detail::page_rank_2_impl::page_rank_2<Real>>(
         hpx::execution::seq, G, hpx::ref(from_pr), hpx::ref(to_pr), base_score, damping_factor);
     };
 

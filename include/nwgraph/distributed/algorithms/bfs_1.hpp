@@ -19,7 +19,7 @@
 #endif
 
 #include "nwgraph/algorithms/bfs.hpp"
-#include "nwgraph/algorithms/partitioned_algorithm.hpp"
+#include "nwgraph/distributed/algorithms/algorithm.hpp"
 
 #include <algorithm>
 #include <atomic>

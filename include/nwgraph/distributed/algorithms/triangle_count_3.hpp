@@ -18,7 +18,7 @@
 #error "This file requires using HPX as a backend for NWGraph"
 #endif
 
-#include "nwgraph/algorithms/partitioned_algorithm.hpp"
+#include "nwgraph/distributed/algorithms/algorithm.hpp"
 #include "nwgraph/algorithms/triangle_count.hpp"
 
 #include <algorithm>
@@ -35,6 +35,8 @@
 namespace nw::graph {
 
   namespace detail {
+
+    namespace triangle_count_3_impl {
 
     ////////////////////////////////////////////////////////////////////////////
     struct triangle_count_3 : hpx::parallel::detail::algorithm<triangle_count_3, size_t> {
@@ -56,6 +58,8 @@ namespace nw::graph {
         using target_list_t = std::vector<
           std::tuple<std::vector<vertex_id_type>, std::vector<std::tuple<vertex_id_type>>>>;
         using remote_counts_t = std::map<hpx::id_type, target_list_t>;
+        auto cmp = [&G](auto&& lhs, auto&& rhs)
+        { return static_cast<vertex_id_type>(target(G, lhs)) < static_cast<vertex_id_type>(target(G, rhs)); };
 
         // use half of the available cores for parallelizing the loop
         auto p = hpx::execution::par;
@@ -65,7 +69,7 @@ namespace nw::graph {
           p, (std::max)(cores / 2, size_t(1)));
 
         // for each v in G do
-        safe_object<std::tuple<size_t, remote_counts_t, std::vector<hpx::future<size_t>>>>
+        nw::graph::detail::safe_object<std::tuple<size_t, remote_counts_t, std::vector<hpx::future<size_t>>>>
           remote_counts;
 
         auto tc = [&](auto&& neighbor_range)
@@ -76,11 +80,12 @@ namespace nw::graph {
 
           for (auto const& edge : neighbor_range) {
 
-            vertex_id_type v = target(G, edge);
+            vertex_id_type v = static_cast<vertex_id_type>(target(G, edge));
 
-            if (is_same_locality(this_locality_id, G, v)) {
+            if (nw::graph::detail::is_same_locality(this_locality_id, G, v)) {
               // handle things locally
-              triangles += nw::graph::intersection_size(neighbor_range, G[v]);
+              auto target_neighbors = G[v];
+              triangles += nw::graph::intersection_size(neighbor_range, target_neighbors, cmp);
             }
             else {
               // send our neighbors to elt's locality
@@ -100,7 +105,7 @@ namespace nw::graph {
             // first, collect all vertices with the same neighbors for each locality
             std::map<hpx::id_type, std::vector<vertex_id_type>> target_vertices;
             for (auto v : v_targets) {
-              auto id = vertex_locality(G, v);
+              auto id = nw::graph::detail::vertex_locality(G, v);
               target_vertices[id].push_back(v);
             }
 
@@ -165,6 +170,8 @@ namespace nw::graph {
         return 0;
       }
     };
+
+    } // namespace triangle_count_3_impl
     /// \endcond
   } // namespace detail
 
@@ -178,8 +185,8 @@ namespace nw::graph {
 
   template <adjacency_list_graph Graph>
   size_t partitioned_triangle_count_3(Graph& G, size_t batchsize) {
-    auto counts =
-      partitioned_segmented_algorithm<detail::triangle_count_3>(hpx::execution::seq, G, batchsize);
+    auto counts = partitioned_algorithm<detail::triangle_count_3_impl::triangle_count_3>(
+      hpx::execution::seq, G, batchsize);
     return std::transform_reduce(
       counts.begin(), counts.end(), size_t(0),
       [](size_t count, size_t curr) { return count + curr; }, [](auto&& f) { return f.get(); });

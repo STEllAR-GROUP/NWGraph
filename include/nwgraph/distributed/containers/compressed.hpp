@@ -23,7 +23,7 @@
 #endif
 
 #include "nwgraph/adaptors/splittable_range_adaptor.hpp"
-#include "nwgraph/containers/partitioned_soa.hpp"
+#include "nwgraph/distributed/containers/soa.hpp"
 #include "nwgraph/graph_base.hpp"
 #include "nwgraph/util/defaults.hpp"
 #include "nwgraph/util/proxysort.hpp"

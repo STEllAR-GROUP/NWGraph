@@ -5,7 +5,8 @@
 #error "This file requires using HPX as a backend for NWGraph"
 #endif
 
-#include "nwgraph/algorithms/partitioned_algorithm.hpp"
+#include "nwgraph/distributed/algorithms/algorithm.hpp"
+#include "nwgraph/distributed/copartitioned_vector.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -23,7 +24,6 @@
 namespace nw::graph {
 
   namespace detail {
-
     template <typename Graph>
     static void
     out_degree_count_packet(
@@ -43,7 +43,6 @@ namespace nw::graph {
 
 
     struct out_degree_count : hpx::parallel::detail::algorithm<out_degree_count, int> {
-
       constexpr out_degree_count() noexcept
         : hpx::parallel::detail::algorithm<out_degree_count, int>("out_degree_count") {}
 
@@ -63,27 +62,29 @@ namespace nw::graph {
 
         auto deg_iter = degrees.get_local_iterator(first_index).local();
 
-        using vertex_id_type = vertex_id_t<std::remove_reference_t<Graph>>;
+        using graph_type = std::remove_reference_t<Graph>;
+        using vertex_id_type = vertex_id_t<graph_type>;
+        using neighborhood_type = inner_range_t<graph_type>;
 
         std::map<hpx::id_type, std::vector<vertex_id_type>> outgoing_packets;
 
         // for each v in G do
         for (auto v_it = first; v_it != last; ++v_it) {
 
-          auto neighbor_range = *v_it;
-          for (auto neighbor : neighbor_range) {
+          neighborhood_type neighborhood = *v_it;
+          for (auto neighbor : neighborhood) {
 
             vertex_id_type v = target(G, neighbor);
 
             auto v_loc_id = vertex_locality(G, v);
             if (v_loc_id == this_locality_id) {
-              // send to elt's locality
-              outgoing_packets[v_loc_id].push_back(v);
-            }
-            else {
               // handle things locally
               auto deg_iter = degrees.get_local_iterator(v).local();
               (*deg_iter)++;
+            }
+            else {
+              // send to v's locality
+              outgoing_packets[v_loc_id].push_back(v);
             }
           }
         }
@@ -117,23 +118,26 @@ namespace nw::graph {
     
 
     struct in_degree_count : hpx::parallel::detail::algorithm<in_degree_count, int> {
-      static constexpr bool partition_aware = true;
-
       constexpr in_degree_count() noexcept
         : hpx::parallel::detail::algorithm<in_degree_count, int>("in_degree_count") {}
 
 
       template <typename ExPolicy, typename Graph>
-      static int sequential(ExPolicy&& policy, Graph G, partition_t<std::remove_reference_t<Graph>> partition,
+      static int sequential(ExPolicy&& policy, Graph G, const size_t first_index,
+                             const size_t last_index,
                              hpx::partitioned_vector<vertex_id_t<std::remove_reference_t<Graph>>> degrees) {
 
-        decltype(auto) G_data = detail::partition_data(G, partition);
-        decltype(auto) degrees_data = detail::partition_data(degrees, partition);
+        using graph_type = std::remove_reference_t<Graph>;
+        using vertex_id_type = vertex_id_t<graph_type>;
+        using neighborhood_type = inner_range_t<graph_type>;
+        auto first_vertex = static_cast<vertex_id_type>(first_index);
+        auto last_vertex = static_cast<vertex_id_type>(last_index);
+        auto degree_first = degrees.get_local_iterator(first_index).local();
 
-        auto u = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_first_index(partition));
-        auto end = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_last_index(partition));
-        for (; u != end; ++u) {
-          degrees_data[u] = detail::row_size(G_data[u]);
+        for (auto u = first_vertex; u != last_vertex; ++u) {
+          auto offset = static_cast<std::size_t>(u - first_vertex);
+          neighborhood_type neighborhood = G[u];
+          *(degree_first + offset) = std::ranges::size(neighborhood);
         }
 
         return 0;
@@ -163,7 +167,21 @@ namespace nw::graph {
     degrees.register_as("degrees"); // TODO: Do we need a unique name on each invocation?
     
 
-    //partitioned_algorithm<detail::out_degree_count>(hpx::execution::seq, G, hpx::ref(degrees));
+    auto futures = partitioned_algorithm<detail::out_degree_count>(hpx::execution::seq, G, hpx::ref(degrees));
+    hpx::wait_all(futures);
+
+    return degrees;
+  }
+
+  template <partitioned_algorithm_graph Graph>
+  auto partitioned_row_degrees(Graph& G) {
+
+    using vertex_id_type = vertex_id_t<std::remove_reference_t<Graph>>;
+
+    auto degrees = make_copartitioned_vector<vertex_id_type>(G);
+
+    degrees.register_as("degrees");
+
     auto futures = partitioned_algorithm<detail::in_degree_count>(hpx::execution::seq, G, hpx::ref(degrees));
     hpx::wait_all(futures);
 
@@ -183,25 +201,26 @@ namespace nw::graph {
     namespace detail {
     struct avg_degree_per_partition
       : hpx::parallel::detail::algorithm<avg_degree_per_partition, double> {
-      static constexpr bool partition_aware = true;
-
       constexpr avg_degree_per_partition() noexcept
         : hpx::parallel::detail::algorithm<avg_degree_per_partition, double>(
             "avg_degree_per_partition") {}
 
 
       template <typename ExPolicy, typename Graph>
-      static double sequential(ExPolicy&& policy, Graph G, partition_t<std::remove_reference_t<Graph>> partition) {
-
-        decltype(auto) G_data = detail::partition_data(G, partition);
+      static double sequential(ExPolicy&& policy, Graph G, const size_t first_index,
+                               const size_t last_index) {
 
         double count = 0;
-        double part_size = partition_size(partition);
+        double part_size = static_cast<double>(last_index - first_index);
 
-        auto u = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_first_index(partition));
-        auto end = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_last_index(partition));
-        for (; u != end; ++u) {
-          count += detail::row_size(G_data[u]);
+        using graph_type = std::remove_reference_t<Graph>;
+        using vertex_id_type = vertex_id_t<graph_type>;
+        using neighborhood_type = inner_range_t<graph_type>;
+        auto first_vertex = static_cast<vertex_id_type>(first_index);
+        auto last_vertex = static_cast<vertex_id_type>(last_index);
+        for (auto u = first_vertex; u != last_vertex; ++u) {
+          neighborhood_type neighborhood = G[u];
+          count += std::ranges::size(neighborhood);
         }
 
         return count / part_size;
@@ -235,25 +254,25 @@ namespace nw::graph {
     namespace detail {
       struct avg_remote_degree_per_partition
         : hpx::parallel::detail::algorithm<avg_remote_degree_per_partition, double> {
-        static constexpr bool partition_aware = true;
-
         constexpr avg_remote_degree_per_partition() noexcept
           : hpx::parallel::detail::algorithm<avg_remote_degree_per_partition, double>(
               "avg_remote_degree_per_partition") {}
 
         template <typename ExPolicy, typename Graph>
-        static double sequential(ExPolicy&& policy, Graph G, partition_t<std::remove_reference_t<Graph>> partition) {
-          hpx::id_type this_locality_id = hpx::find_here();
-          decltype(auto) G_data = detail::partition_data(G, partition);
+        static double sequential(ExPolicy&& policy, Graph G, const size_t first_index,
+                                 const size_t last_index) {
           double count = 0;
-          double part_size = partition_size(partition);
-          auto u = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_first_index(partition));
-          auto end = static_cast<vertex_id_t<std::remove_reference_t<Graph>>>(partition_last_index(partition));
-          for (; u != end; ++u) {
-            auto neighbor_range = detail::iterable_row(G_data[u]);
-            for (auto&& neighbor : neighbor_range) {
-              auto v = detail::edge_target(G_data, neighbor);
-              if (!is_local(partition, v)) {
+          double part_size = static_cast<double>(last_index - first_index);
+          using graph_type = std::remove_reference_t<Graph>;
+          using vertex_id_type = vertex_id_t<graph_type>;
+          using neighborhood_type = inner_range_t<graph_type>;
+          auto first_vertex = static_cast<vertex_id_type>(first_index);
+          auto last_vertex = static_cast<vertex_id_type>(last_index);
+          for (auto u = first_vertex; u != last_vertex; ++u) {
+            neighborhood_type neighborhood = G[u];
+            for (auto&& neighbor : neighborhood) {
+              auto v = static_cast<vertex_id_type>(target(G, neighbor));
+              if (v < first_vertex || last_vertex <= v) {
                 count++;
               }
             }

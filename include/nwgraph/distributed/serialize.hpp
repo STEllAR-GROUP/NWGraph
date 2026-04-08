@@ -11,11 +11,11 @@
 #include <numeric>
 
 #include "nwgraph/adjacency.hpp"
-#include "nwgraph/algorithms/partitioned_algorithm.hpp"
+#include "nwgraph/distributed/algorithms/algorithm.hpp"
 #include "nwgraph/edge_list.hpp"
 #include "nwgraph/graph_base.hpp"
 #include "nwgraph/io/mmio.hpp"
-#include "nwgraph/partitioned_adjacency.hpp"
+#include "nwgraph/distributed/adjacency.hpp"
 
 #include <hpx/async_combinators/wait_all.hpp>
 #include <hpx/executors/execution_policy.hpp>
@@ -345,16 +345,17 @@ namespace nw::graph {
 
       template <typename ExPolicy>
       static int sequential(ExPolicy&&, partitioned_adjacency<0> G,
-                            partition_descriptor partition, std::string file_name) {
+                            const size_t first_index, const size_t last_index,
+                            std::string file_name) {
 
         using reader_t = adj_reader<default_index_t, default_vertex_id_type>;
         reader_t reader(file_name);
-        auto first_index = partition.first_index();
-        auto last_index = partition.last_index();
+
         auto [indices, to_be_indexed] = reader.read_part(first_index, last_index);
-        if (last_index != G.size()) {
-          indices.pop_back(); // Will be included in the next partition.
+        if (last_index < static_cast<std::size_t>(G.size())) {
+          indices.pop_back();
         }
+
         auto p_indices = G.get_indices().get_local_iterator(first_index).local();
         auto first_to_be_idx = indices.front();
         auto p_to_be_indexed =
@@ -362,6 +363,7 @@ namespace nw::graph {
 
         std::copy(indices.begin(), indices.end(), p_indices);
         std::copy(to_be_indexed.begin(), to_be_indexed.end(), p_to_be_indexed);
+
         return 0;
       }
 
